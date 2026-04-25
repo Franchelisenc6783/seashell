@@ -23,6 +23,58 @@ function __nl_enter --description 'Enter key handler: NL routing with spinner + 
         set first (string split -m1 ' ' -- $trimmed)[1]
     end
 
+    # ── Resume-intent fast path ──────────────────────────────────────────────
+    # Bypass NL classification entirely if the line clearly says "resume X".
+    # Mirrors the patterns from `hey` so typing "let's continue with myapp" at
+    # the bare fish prompt resumes the project's primary session — no chatbot
+    # detour, no need to remember the `hey` prefix.
+    set -l trimmed_lc (string lower -- $trimmed)
+    set -l resume_target ""
+
+    # Note on `--`: fish's `string replace` already consumes one `--` as the
+    # end-of-options marker. A second `--` between REPLACEMENT and STRING gets
+    # treated as a LITERAL string argument — so we only emit one `--`, placed
+    # immediately before the user-supplied STRING (which might start with `-`).
+    if string match -qr -- '(^|.*\b)(let.?s? |let me |let us |please )?continue with ' $trimmed_lc
+        set resume_target (string replace -ri '^.*\bcontinue with\s+' '' -- $trimmed)
+    else if string match -qr -- '(^|.*\b)(let.?s? |let me |let us |please )?continue working (on|with) ' $trimmed_lc
+        set resume_target (string replace -ri '^.*\bcontinue working (on|with)\s+' '' -- $trimmed)
+    else if string match -qr -- '(^|.*\b)(let.?s? |let me |let us )work (on|with) ' $trimmed_lc
+        set resume_target (string replace -ri '^.*\bwork (on|with)\s+' '' -- $trimmed)
+    else if string match -qr -- '^resume ' $trimmed_lc
+        set resume_target (string replace -ri '^resume\s+' '' -- $trimmed)
+    else if string match -qr -- '(^|.*\b)(go back to |pick up |switch back to |switch to ) ' $trimmed_lc
+        set resume_target (string replace -ri '^.*\b(go back to|pick up|switch back to|switch to)\s+' '' -- $trimmed)
+    end
+
+    if test -n "$resume_target"
+        # Cleanup order matters: punctuation FIRST (otherwise the suffix-strip
+        # regex's `$` anchor doesn't match through trailing dots/exclamations),
+        # then trailing fluff (session/project/repo), then leading articles.
+        set resume_target (string replace -r '[.!?,]+$' '' -- $resume_target)
+        set resume_target (string replace -ri '\s+(coding\s+)?(session|project|repo)\s*$' '' -- $resume_target)
+        set resume_target (string replace -ri '^(the|our|my|that|this)\s+' '' -- $resume_target)
+        set resume_target (string trim -- $resume_target)
+
+        if test -n "$resume_target"
+            # `seashell-sessions primary <name>` returns the pinned session id
+            # for that project (or falls back to most-recent if unpinned).
+            set -l sid (seashell-sessions primary "$resume_target" 2>/dev/null)
+            if test -n "$sid"
+                commandline ''
+                commandline -f repaint
+                set_color cyan
+                printf '🔄 Resuming session %s (project: %s)...' (string sub -l 8 -- $sid) "$resume_target"
+                set_color normal
+                echo ""
+                exec claude --resume "$sid"
+            end
+            # No matching session → fall through to normal NL processing so
+            # the user isn't blocked. (e.g. they meant "continue with the
+            # ASCII art" in chat, not a project name we know.)
+        end
+    end
+
     # ── Natural language detection ────────────────────────────────────────────
     # Shell commands never contain English articles, possessives, or linking
     # words — so their presence is a reliable NL signal.

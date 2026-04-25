@@ -147,19 +147,33 @@ def merge_sources():
 
 def fuzzy_match(query, sessions):
     q = query.lower().strip()
+    # Strip leading articles/possessives — "the weather app" should
+    # match the same set as "weather app".
+    for stop in ("the ", "our ", "my ", "this ", "that "):
+        if q.startswith(stop):
+            q = q[len(stop):].strip()
+            break
+    # Normalised: collapse spaces/dashes/underscores so "weather app"
+    # matches "weatherapp" matches "weather-app".
+    q_norm = "".join(c for c in q if c.isalnum())
     scored = []
     for s in sessions:
         label = s.get("label", "").lower()
+        label_norm = "".join(c for c in label if c.isalnum())
         cwd = s.get("cwd", "").lower()
         score = 0
         if q == label:
             score = 100
+        elif q_norm and q_norm == label_norm:
+            score = 95           # "weather app" == "weatherapp"
         elif label.startswith(q):
             score = 85
         elif q in label:
             score = 75
         elif label.replace("-", "") == q.replace("-", ""):
             score = 90
+        elif q_norm and len(q_norm) >= 4 and q_norm in label_norm:
+            score = 80           # multi-word query is a substring of label
         elif q in cwd:
             score = 50
         if not score:
