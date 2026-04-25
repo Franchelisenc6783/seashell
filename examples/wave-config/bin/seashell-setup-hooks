@@ -36,11 +36,15 @@ fi
 cp "$SETTINGS" "$SETTINGS.backup-$(date +%Y%m%d-%H%M%S)"
 
 # Use Python for safe JSON merge (preserves user's existing keys)
-# Hook config schema:
-#   SessionStart: list of {type, command, matcher} — matcher is one of
-#       "startup" | "resume" | "clear" | "compact"
-#   PostToolUse:  list of {matcher, hooks: [{type, command}]} — matcher is
-#       a tool name pattern; we use ".*" to match all tools.
+# Hook config schema (verified empirically against Claude Code 2.1.119+):
+#   Every event entry has the form
+#       {"matcher": "<pattern>", "hooks": [{"type": "command", "command": "<path>"}]}
+#   For SessionStart, valid matchers are: "startup", "resume", "clear", "compact"
+#   For PostToolUse, the matcher is a tool-name regex; ".*" matches all tools.
+#
+# This script is idempotent: it removes any old-format entries and rewrites
+# the SeaShell entries to the correct schema. Other users' hook entries are
+# preserved.
 python3 - "$SETTINGS" "$SS_HOOK" "$PT_HOOK" <<'PYEOF'
 import json, sys
 path, ss_hook, pt_hook = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -50,56 +54,58 @@ with open(path) as f:
 
 settings.setdefault("hooks", {})
 
-def upsert_session_start(command):
-    """Add SessionStart hooks for both startup and resume matchers."""
-    existing = settings["hooks"].get("SessionStart", [])
+
+def is_seashell_entry(entry, target_command):
+    """Detect a SeaShell hook entry in either correct or old (broken) format."""
+    if not isinstance(entry, dict):
+        return False
+    # Correct format: matcher + hooks array
+    hooks_arr = entry.get("hooks")
+    if isinstance(hooks_arr, list):
+        return any(
+            isinstance(h, dict) and h.get("command") == target_command
+            for h in hooks_arr
+        )
+    # Legacy/broken format: type + command + matcher at top level
+    return entry.get("command") == target_command
+
+
+def normalize_event(event_name, target_command, matchers_to_install):
+    """
+    Strip any seashell entries (old or new format) for this event,
+    then insert correct-format entries for each desired matcher.
+    Preserves any non-seashell entries.
+    """
+    existing = settings["hooks"].get(event_name, [])
     if isinstance(existing, dict):
         existing = [existing]
-    added = 0
-    for matcher in ("startup", "resume"):
-        entry = {"type": "command", "command": command, "matcher": matcher}
-        if any(
-            isinstance(e, dict)
-            and e.get("command") == command
-            and e.get("matcher") == matcher
-            for e in existing
-        ):
-            continue
-        existing.append(entry)
-        added += 1
-    settings["hooks"]["SessionStart"] = existing
-    return added
 
-def upsert_post_tool_use(command):
-    """Add PostToolUse hook with matcher='.*' to fire on all tools."""
-    existing = settings["hooks"].get("PostToolUse", [])
-    if isinstance(existing, dict):
-        existing = [existing]
-    # Look for an existing matcher block we'd be adding to
-    for entry in existing:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("matcher") != ".*":
-            continue
-        hooks = entry.setdefault("hooks", [])
-        if any(isinstance(h, dict) and h.get("command") == command for h in hooks):
-            return 0  # already there
-        hooks.append({"type": "command", "command": command})
-        return 1
-    # No suitable block — create one
-    existing.append({"matcher": ".*", "hooks": [{"type": "command", "command": command}]})
-    settings["hooks"]["PostToolUse"] = existing
-    return 1
+    # Drop seashell entries (regardless of format)
+    cleaned = [e for e in existing if not is_seashell_entry(e, target_command)]
 
-added_ss = upsert_session_start(ss_hook)
-added_pt = upsert_post_tool_use(pt_hook)
+    # Add correct-format entry for each matcher
+    for matcher in matchers_to_install:
+        cleaned.append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": target_command}],
+        })
+
+    settings["hooks"][event_name] = cleaned
+    return len(matchers_to_install)
+
+
+# SessionStart: register for both startup and resume
+ss_added = normalize_event("SessionStart", ss_hook, ["startup", "resume"])
+
+# PostToolUse: matcher='.*' fires for every tool
+pt_added = normalize_event("PostToolUse", pt_hook, [".*"])
 
 with open(path, "w") as f:
     json.dump(settings, f, indent=2)
     f.write("\n")
 
-print(f"✓ SessionStart hook: {added_ss} entry/entries added (startup + resume matchers)")
-print(f"✓ PostToolUse hook:  {added_pt} entry added (matcher='.*')")
+print(f"✓ SessionStart: {ss_added} matcher entries installed (startup + resume)")
+print(f"✓ PostToolUse:  {pt_added} matcher entry installed (.*)")
 PYEOF
 
 ok "Hooks configured at $SETTINGS"
