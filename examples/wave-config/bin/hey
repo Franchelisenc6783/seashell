@@ -7,8 +7,8 @@
 #   2. ASK — anything else routes to seashell-ask (post to inbox, await reply).
 #
 # Usage:
-#   hey continue with CurrentTraderPro
-#   hey resume ctp
+#   hey continue with myapp
+#   hey resume ma
 #   hey let's work on the seashell project
 #   hey what was the last refactoring decision we made
 #   swift build 2>&1 | hey "fix these errors"
@@ -25,10 +25,10 @@ Usage:
   hey -h | --help                  Show this help
 
 Examples:
-  hey continue with CurrentTraderPro
-  hey resume ctp
+  hey continue with myapp
+  hey resume ma
   hey let's work on the bug ticket
-  hey what was the last reply you sent in CurrentTraderPro
+  hey what was the last reply you sent in myapp
   swift build 2>&1 | hey "fix these errors"
 EOF
 }
