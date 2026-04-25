@@ -133,7 +133,7 @@ for name, srv in sorted(servers.items()):
     cmd = ["claude", "mcp", "add", "--scope", "user"]
     for k, v in (srv.get("env") or {}).items():
         display_v = "<redacted>" if is_secret(k, v) else v
-        cmd += ["-e", f"{k}={display_v}"]
+        cmd += [f"--env={k}={display_v}"]
     cmd.append(name)
     cmd.append("--")
     cmd.append(srv.get("command", ""))
@@ -160,8 +160,13 @@ added, failed_names = 0, []
 
 for name, srv in sorted(servers.items()):
     argv = ["claude", "mcp", "add", "--scope", "user"]
+    # Use `--env=KEY=val` (single token, attached value) instead of `-e KEY=val`
+    # because claude's `-e <env...>` is a greedy rest-args flag that otherwise
+    # consumes the server NAME positional arg, producing
+    # "Invalid environment variable format: <name>" or
+    # "missing required argument 'commandOrUrl'".
     for k, v in (srv.get("env") or {}).items():
-        argv += ["-e", f"{k}={v}"]
+        argv += [f"--env={k}={v}"]
     argv += [name, "--", srv.get("command", "")]
     argv += list(srv.get("args") or [])
     proc = subprocess.run(argv, capture_output=True, text=True)
