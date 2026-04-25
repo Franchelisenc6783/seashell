@@ -222,7 +222,10 @@ Posts a message with a `reply_token`, polls for a matching reply in `replies.jso
 ```bash
 seashell-mirror-mcp --dry-run     # preview what would be added (env values redacted)
 seashell-mirror-mcp --list        # just print the diff
-seashell-mirror-mcp               # apply: clone Desktop MCP entries to the CLI
+seashell-mirror-mcp               # apply: clone Desktop MCP entries to the CLI (additive)
+seashell-mirror-mcp --update      # force re-sync EVERY Desktop server (picks up rotated tokens,
+                                  # env-var changes, command edits). Removes + re-adds each entry.
+                                  # Doesn't touch CLI-only servers (e.g. seashell).
 ```
 
 Claude Desktop and Claude Code CLI use **separate config files** for MCP server registration (`claude_desktop_config.json` vs `~/.claude.json`), even though they share the same session `.jsonl` storage. So a session resumed via `hey continue with <project>` may be missing tools that Desktop has — e.g. you can ask Claude about Trello in Desktop but the resumed CLI session has no Trello MCP. This script mirrors Desktop → CLI (additive only, never removes), making the tool surface match. Idempotent and safe to re-run whenever you add a new server in Desktop.

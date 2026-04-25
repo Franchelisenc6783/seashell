@@ -18,7 +18,11 @@
 # Claude Desktop that you also want available on the CLI.
 #
 # Usage:
-#   seashell-mirror-mcp              Mirror Desktop → CLI (additive)
+#   seashell-mirror-mcp              Mirror Desktop → CLI (additive only)
+#   seashell-mirror-mcp --update     Force re-sync EVERY Desktop server (picks up
+#                                    rotated tokens, env-var changes, command
+#                                    edits). Removes-then-adds each entry. Does
+#                                    not touch CLI-only servers (e.g. seashell).
 #   seashell-mirror-mcp --dry-run    Show what would be added, do nothing
 #   seashell-mirror-mcp --list       Just print the diff (Desktop minus CLI)
 #   seashell-mirror-mcp -h | --help
@@ -37,9 +41,11 @@ esac
 
 DRY_RUN=0
 LIST_ONLY=0
+UPDATE_MODE=0
 case "${1:-}" in
     --dry-run) DRY_RUN=1 ;;
     --list)    LIST_ONLY=1 ;;
+    --update)  UPDATE_MODE=1 ;;
 esac
 
 # ── Pre-flight ─────────────────────────────────────────────────────────────────
@@ -64,8 +70,20 @@ cli_existing=$(claude mcp list 2>/dev/null \
     | awk -F: '/^[a-zA-Z0-9_-]+:[[:space:]]/ {print $1}' \
     | sort -u)
 
-# Compute what's in Desktop, what's missing from CLI
-to_add_json=$(python3 - "$DESKTOP_CONFIG" <<'PYEOF' "$cli_existing"
+# Compute what's in Desktop, what's missing from CLI.
+# In --update mode, every Desktop server is in scope (even already-registered
+# ones) — the apply path will remove-then-add each one to pick up rotated
+# tokens / changed env / edited commands.
+if [ "$UPDATE_MODE" -eq 1 ]; then
+    to_add_json=$(python3 - "$DESKTOP_CONFIG" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+print(json.dumps(cfg.get("mcpServers", {}), sort_keys=True))
+PYEOF
+)
+else
+    to_add_json=$(python3 - "$DESKTOP_CONFIG" <<'PYEOF' "$cli_existing"
 import json, sys
 desktop_path = sys.argv[1]
 cli_existing = set(filter(None, sys.argv[2].splitlines()))
@@ -76,6 +94,7 @@ missing = {name: srv for name, srv in servers.items() if name not in cli_existin
 print(json.dumps(missing, sort_keys=True))
 PYEOF
 )
+fi
 
 # Pull the names back out for display
 missing_names=$(printf '%s' "$to_add_json" | python3 -c '
@@ -84,7 +103,12 @@ print("\n".join(sorted(json.load(sys.stdin).keys())))
 ')
 
 if [ -z "$missing_names" ]; then
-    printf '\033[32m✓\033[0m Nothing to mirror — Claude Code CLI already has every MCP server registered with Claude Desktop.\n'
+    if [ "$UPDATE_MODE" -eq 1 ]; then
+        printf '\033[33m⚠\033[0m Desktop config has no MCP servers to mirror. Nothing to do.\n'
+    else
+        printf '\033[32m✓\033[0m Nothing to mirror — Claude Code CLI already has every MCP server registered with Claude Desktop.\n'
+        printf '   (To force re-sync existing entries, use --update.)\n'
+    fi
     exit 0
 fi
 
@@ -95,7 +119,11 @@ with open('$DESKTOP_CONFIG') as f:
     print(len(json.load(f).get('mcpServers', {})))
 ")
 
-printf '\033[36m▶\033[0m %s of %s Desktop MCP servers are missing from the Claude Code CLI:\n\n' "$count" "$total_desktop"
+if [ "$UPDATE_MODE" -eq 1 ]; then
+    printf '\033[36m▶\033[0m --update mode: re-syncing all %s Desktop MCP servers (remove + re-add per entry):\n\n' "$count"
+else
+    printf '\033[36m▶\033[0m %s of %s Desktop MCP servers are missing from the Claude Code CLI:\n\n' "$count" "$total_desktop"
+fi
 printf '%s\n' "$missing_names" | sed 's/^/    - /'
 echo ""
 
@@ -146,19 +174,33 @@ PYEOF
 fi
 
 # ── Apply ───────────────────────────────────────────────────────────────────────
-printf 'Applying mirror (this calls `claude mcp add` once per missing server)...\n\n'
+if [ "$UPDATE_MODE" -eq 1 ]; then
+    printf 'Applying re-sync (remove + add per server, picks up new env values)...\n\n'
+else
+    printf 'Applying mirror (this calls `claude mcp add` once per missing server)...\n\n'
+fi
 
 # Drive the apply loop from Python — building the claude argv from JSON and
 # subprocess-running it is far cleaner than passing multi-arg records through
 # a shell `read` loop (newlines in values would break the record boundaries).
-SEASHELL_TO_ADD="$to_add_json" python3 - <<'PYEOF'
+SEASHELL_TO_ADD="$to_add_json" SEASHELL_UPDATE_MODE="$UPDATE_MODE" python3 - <<'PYEOF'
 import json, os, subprocess, sys
 
 GREEN = "\033[32m"; RED = "\033[31m"; YELLOW = "\033[33m"; RESET = "\033[0m"
 servers = json.loads(os.environ["SEASHELL_TO_ADD"])
+update_mode = os.environ.get("SEASHELL_UPDATE_MODE") == "1"
 added, failed_names = 0, []
 
 for name, srv in sorted(servers.items()):
+    # In --update mode, remove the existing entry first so the subsequent add
+    # picks up new env values / changed command. We don't care if the remove
+    # fails (server may not be there yet — same as default mode).
+    if update_mode:
+        subprocess.run(
+            ["claude", "mcp", "remove", name, "-s", "user"],
+            capture_output=True, text=True,
+        )
+
     argv = ["claude", "mcp", "add", "--scope", "user"]
     # Use `--env=KEY=val` (single token, attached value) instead of `-e KEY=val`
     # because claude's `-e <env...>` is a greedy rest-args flag that otherwise
@@ -171,7 +213,8 @@ for name, srv in sorted(servers.items()):
     argv += list(srv.get("args") or [])
     proc = subprocess.run(argv, capture_output=True, text=True)
     if proc.returncode == 0:
-        print(f"  {GREEN}✓{RESET} added {name}")
+        verb = "re-synced" if update_mode else "added"
+        print(f"  {GREEN}✓{RESET} {verb} {name}")
         added += 1
     else:
         # Surface the first line of the error so failures aren't silent
@@ -182,7 +225,8 @@ for name, srv in sorted(servers.items()):
 
 print()
 if not failed_names:
-    print(f"{GREEN}✓{RESET} Done — {added} server(s) mirrored from Desktop to CLI.")
+    verb = "re-synced" if update_mode else "mirrored from Desktop to CLI"
+    print(f"{GREEN}✓{RESET} Done — {added} server(s) {verb}.")
     print()
     print("Next time you resume a session via `hey continue with <project>` or")
     print("`claude --resume <id>`, the CLI will have the same MCP tool surface as")
