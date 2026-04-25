@@ -50,8 +50,11 @@ function __nl_enter --description 'Enter key handler: NL routing with spinner + 
     if test -n "$resume_target"
         # Cleanup order matters: punctuation FIRST (otherwise the suffix-strip
         # regex's `$` anchor doesn't match through trailing dots/exclamations),
-        # then trailing fluff (session/project/repo), then leading articles.
+        # then "called/named X" tails (drops noise like "my Python project
+        # called X" → "X"), then trailing fluff (session/project/repo), then
+        # leading articles.
         set resume_target (string replace -r '[.!?,]+$' '' -- $resume_target)
+        set resume_target (string replace -ri '^.*\b(called|named|labelled|labeled)\s+' '' -- $resume_target)
         set resume_target (string replace -ri '\s+(coding\s+)?(session|project|repo)\s*$' '' -- $resume_target)
         set resume_target (string replace -ri '^(the|our|my|that|this)\s+' '' -- $resume_target)
         set resume_target (string trim -- $resume_target)
