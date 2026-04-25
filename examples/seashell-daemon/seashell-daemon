@@ -14,7 +14,10 @@ POLL_INTERVAL="${SEASHELL_DAEMON_POLL:-5}"
 CLAUDE_TIMEOUT="${SEASHELL_DAEMON_CLAUDE_TIMEOUT:-120}"
 
 log() {
-    printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG_FILE"
+    # Append to LOG_FILE only. When run as a LaunchAgent the plist already
+    # redirects stdout/stderr to LOG_FILE, so writing via tee would duplicate
+    # every line. When run in the foreground, tail -f the log to watch live.
+    printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG_FILE"
 }
 
 count_unread() {
