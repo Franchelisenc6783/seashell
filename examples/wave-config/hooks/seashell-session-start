@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# seashell-session-start — Claude Code SessionStart hook
+#
+# Receives JSON via stdin from Claude Code with the new session's metadata.
+# Records the session in ~/.seashell/sessions/<id>.json so other Seashell
+# tooling (resume-by-name, hey command, daemon, side blocks) can find it.
+#
+# Also (best-effort) auto-spawns two Wave Terminal side blocks if invoked
+# from inside a Wave block:
+#   1. activity tail — shows what Claude is doing in real time
+#   2. live preview — follows the most-recently-edited file
+# Both can be disabled with SEASHELL_NO_SIDE_BLOCKS=1.
+
+set -euo pipefail
+
+INPUT=$(cat)
+
+# ── Parse session_id and cwd from the hook input ─────────────────────────────
+SESSION_ID=$(printf '%s' "$INPUT" | python3 -c 'import json, sys; d=json.load(sys.stdin); print(d.get("session_id", ""))' 2>/dev/null || echo "")
+CWD=$(printf '%s' "$INPUT" | python3 -c 'import json, sys; d=json.load(sys.stdin); print(d.get("cwd", ""))' 2>/dev/null || echo "")
+[ -z "$CWD" ] && CWD="$PWD"
+
+if [ -z "$SESSION_ID" ]; then
+    # No session id — output empty hook response and exit silently
+    printf '{}\n'
+    exit 0
+fi
+
+# ── Derive a friendly project label from cwd ─────────────────────────────────
+LABEL=$(basename "$CWD")
+[ -z "$LABEL" ] && LABEL="(unknown)"
+
+SESSIONS_DIR="$HOME/.seashell/sessions"
+mkdir -p "$SESSIONS_DIR/$SESSION_ID"
+
+# ── Write session metadata ────────────────────────────────────────────────────
+python3 - "$SESSION_ID" "$CWD" "$LABEL" "$SESSIONS_DIR" <<'PYEOF'
+import datetime, json, os, sys
+session_id, cwd, label, sessions_dir = sys.argv[1:5]
+record = {
+    "id": session_id,
+    "cwd": cwd,
+    "label": label,
+    "started_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "wave_block_id": os.environ.get("WAVETERM_BLOCKID", ""),
+    "wave_tab_id": os.environ.get("WAVETERM_TABID", ""),
+}
+path = os.path.join(sessions_dir, f"{session_id}.json")
+with open(path, "w") as f:
+    json.dump(record, f, indent=2)
+PYEOF
+
+# ── Initialise activity log ──────────────────────────────────────────────────
+ACTIVITY_LOG="$SESSIONS_DIR/$SESSION_ID/activity.log"
+printf '[%s] session started: %s (%s)\n' "$(date -u +%FT%TZ)" "$LABEL" "$SESSION_ID" >> "$ACTIVITY_LOG"
+
+# ── (Optional) Auto-spawn side blocks if running inside Wave ─────────────────
+# Requires WAVETERM_JWT to use wsh. Disabled with SEASHELL_NO_SIDE_BLOCKS=1.
+if [ "${SEASHELL_NO_SIDE_BLOCKS:-0}" != "1" ] \
+   && [ -n "${WAVETERM_JWT:-}" ] \
+   && command -v wsh >/dev/null 2>&1; then
+
+    # Block A: activity tail
+    activity_block_id=$(wsh run -c "tail -f '$ACTIVITY_LOG'" 2>/dev/null | tail -1 || true)
+    if [ -n "$activity_block_id" ]; then
+        printf '%s\n' "$activity_block_id" > "$SESSIONS_DIR/$SESSION_ID/activity-block.id"
+    fi
+
+    # Block B: live preview — start with a placeholder file
+    preview_placeholder="$SESSIONS_DIR/$SESSION_ID/current-file.txt"
+    printf '(no file edited yet — Claude will populate this)\n' > "$preview_placeholder"
+    preview_block_id=$(wsh view "$preview_placeholder" 2>/dev/null | tail -1 || true)
+    if [ -n "$preview_block_id" ]; then
+        printf '%s\n' "$preview_block_id" > "$SESSIONS_DIR/$SESSION_ID/preview-block.id"
+    fi
+fi
+
+# Hook protocol: empty JSON response means "proceed normally"
+printf '{}\n'

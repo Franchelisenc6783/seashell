@@ -69,6 +69,7 @@ struct PermissionGuard {
         "inbox_count":         .safe,
         "inbox_history":       .safe,
         "reply_to_user":       .safe,
+        "read_my_replies":     .safe,
     ]
 
     // MARK: Public API

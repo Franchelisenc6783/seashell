@@ -105,16 +105,30 @@ mkdir -p "$HOME/.config/fastfetch"
 cp "$SCRIPT_DIR/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc"
 ok "fastfetch config installed"
 
-# ── 4. Install Seashell shell commands (msg / ask / init) ──────────────────
-say "Installing Seashell commands to ~/.local/bin/ (seashell-msg, seashell-ask, seashell-init)"
+# ── 4. Install Seashell shell commands ─────────────────────────────────────
+say "Installing Seashell commands to ~/.local/bin/"
 mkdir -p "$HOME/.local/bin"
-for cmd in seashell-msg seashell-ask seashell-init; do
-    cp "$SCRIPT_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
-    chmod +x "$HOME/.local/bin/$cmd"
+for cmd in seashell-msg seashell-ask seashell-init seashell-sessions seashell-setup-hooks hey; do
+    if [ -f "$SCRIPT_DIR/bin/$cmd" ]; then
+        cp "$SCRIPT_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
+        chmod +x "$HOME/.local/bin/$cmd"
+    fi
 done
 # Remove the obsolete fish function from a previous install if present
 rm -f "$HOME/.config/fish/functions/seashell-msg.fish"
-ok "Seashell commands installed"
+ok "Shell commands installed: seashell-msg, seashell-ask, seashell-init, seashell-sessions, seashell-setup-hooks, hey"
+
+# ── 4b. Install Claude Code hook scripts ───────────────────────────────────
+if [ -d "$SCRIPT_DIR/hooks" ]; then
+    say "Installing Claude Code hook scripts (SessionStart, PostToolUse)"
+    for hook in seashell-session-start seashell-post-tool-use; do
+        if [ -f "$SCRIPT_DIR/hooks/$hook" ]; then
+            cp "$SCRIPT_DIR/hooks/$hook" "$HOME/.local/bin/$hook"
+            chmod +x "$HOME/.local/bin/$hook"
+        fi
+    done
+    ok "Hook scripts installed"
+fi
 
 # ── 5. Install wave-theme-sync ──────────────────────────────────────────────
 say "Installing wave-theme-sync to ~/.local/bin/"
@@ -152,17 +166,25 @@ Next steps:
 
   1. Edit ~/.config/fish/conf.d/secrets.fish with your real API keys.
 
-  2. (Optional) Merge Wave config templates into your existing Wave settings:
+  2. Wire Claude Code hooks into Seashell:
+       seashell-setup-hooks
+
+  3. (Optional) Merge Wave config templates into your existing Wave settings:
        $SCRIPT_DIR/wave/widgets.template.json
        $SCRIPT_DIR/wave/settings.template.json
      Live Wave files live at ~/.config/waveterm/
      Your current Wave configs are snapshotted at $BACKUP_DIR/waveterm/
 
-  3. Restart fish:
+  4. Restart fish:
        exec fish
 
-  4. Pull the local LLM (if you haven't):
+  5. Pull the local LLM (if you haven't):
        ollama pull qwen2.5-coder:1.5b
 
-  5. Open Wave Terminal — fastfetch greets you, ⌥-Space predicts, Enter does NL.
+  6. Try the new commands:
+       seashell-sessions list           # show all your Claude Code sessions
+       hey continue with <project>      # resume a project's latest session
+       hey what's the latest update?    # send a question to the inbox
+
+  7. Open Wave Terminal — fastfetch greets you, ⌥-Space predicts, Enter does NL.
 EOF

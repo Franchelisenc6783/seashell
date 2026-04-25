@@ -467,3 +467,87 @@ private func locateInboxForMessage(_ id: String, logger: Logger) -> InboxPaths? 
     }
     return nil
 }
+
+// MARK: - Tool: read_my_replies
+
+private func parseReplies(from path: String) -> [ReplyRecord] {
+    guard let data = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    let decoder = JSONDecoder()
+    return data.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+        guard let lineData = String(line).data(using: .utf8) else { return nil }
+        return try? decoder.decode(ReplyRecord.self, from: lineData)
+    }
+}
+
+private func renderReply(_ reply: ReplyRecord, projectLabel: String, index: Int) -> String {
+    var lines: [String] = []
+    lines.append("[\(index)] \(formatTimestamp(reply.ts)) — \(projectLabel) (in reply to msg \(reply.message_id.prefix(8)))")
+    let indented = reply.text
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { "    \($0)" }
+        .joined(separator: "\n")
+    lines.append(indented)
+    return lines.joined(separator: "\n")
+}
+
+/// Browse Claude's past replies (the OUTBOUND side, sibling to inbox_history).
+/// Aggregates across the global inbox + every registered project's replies.jsonl.
+/// Args: limit (default 10, max 100), search (substring filter), project (label filter).
+/// Tier A — safe.
+func handleReadMyReplies(
+    params: CallTool.Parameters,
+    logger: Logger
+) async -> CallTool.Result {
+    var limit = 10
+    var searchTerm: String? = nil
+    var projectFilter: String? = nil
+
+    if let arguments = params.arguments {
+        if let v = arguments["limit"], case .string(let s) = v, let n = Int(s) {
+            limit = max(1, min(n, 100))
+        } else if let v = arguments["limit"], case .int(let n) = v {
+            limit = max(1, min(n, 100))
+        }
+        if let v = arguments["search"], case .string(let s) = v, !s.isEmpty {
+            searchTerm = s
+        }
+        if let v = arguments["project"], case .string(let s) = v, !s.isEmpty {
+            projectFilter = s
+        }
+    }
+
+    let inboxes = discoverInboxes()
+    var combined: [(label: String, reply: ReplyRecord)] = []
+    for inbox in inboxes {
+        if let pf = projectFilter, inbox.label != pf { continue }
+        let replies = parseReplies(from: inbox.replies)
+        for reply in replies {
+            combined.append((inbox.label, reply))
+        }
+    }
+
+    if let term = searchTerm {
+        let needle = term.lowercased()
+        combined = combined.filter { $0.reply.text.lowercased().contains(needle) }
+    }
+
+    // Most recent first
+    combined.sort { $0.reply.ts > $1.reply.ts }
+    combined = Array(combined.prefix(limit))
+
+    if combined.isEmpty {
+        var suffix = ""
+        if let term = searchTerm { suffix += " matching \"\(term)\"" }
+        if let pf = projectFilter { suffix += " in project \(pf)" }
+        return CallTool.Result(content: [.text("📜 No replies recorded\(suffix).")], isError: false)
+    }
+
+    var output = "📜 Your past replies (\(combined.count) most recent"
+    if let term = searchTerm { output += " matching \"\(term)\"" }
+    if let pf = projectFilter { output += " in \(pf)" }
+    output += "):\n\n"
+    output += combined.enumerated()
+        .map { renderReply($1.reply, projectLabel: $1.label, index: $0 + 1) }
+        .joined(separator: "\n\n")
+    return CallTool.Result(content: [.text(output)], isError: false)
+}

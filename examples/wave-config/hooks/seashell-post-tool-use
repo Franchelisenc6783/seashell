@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# seashell-post-tool-use — Claude Code PostToolUse hook
+#
+# Receives JSON via stdin with tool_name, tool_input, session_id, etc.
+# Logs every tool call to the session's activity.log and updates the
+# "current file" pointer when Claude touches Edit/Write tools.
+#
+# Output is appended to ~/.seashell/sessions/<session_id>/activity.log
+# which is tailed by the activity side block spawned at session start.
+
+set -euo pipefail
+
+INPUT=$(cat)
+
+SESSION_ID=$(printf '%s' "$INPUT" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("session_id", ""))' 2>/dev/null || echo "")
+
+if [ -z "$SESSION_ID" ]; then
+    printf '{}\n'
+    exit 0
+fi
+
+LOG_DIR="$HOME/.seashell/sessions/$SESSION_ID"
+mkdir -p "$LOG_DIR"
+ACTIVITY_LOG="$LOG_DIR/activity.log"
+CURRENT_FILE_PTR="$LOG_DIR/current-file.txt"
+
+# ── Build a human-readable summary of the tool call ─────────────────────────
+# Pass INPUT via argv (not stdin — stdin would conflict with the heredoc-style
+# Python script). json.loads(argv[1]) is cleaner here than json.load(stdin).
+SUMMARY=$(python3 -c '
+import json, sys
+data = json.loads(sys.argv[1])
+tool_name = data.get("tool_name", "?")
+tool_input = data.get("tool_input", {}) or {}
+
+def short(s, n=100):
+    if not isinstance(s, str): s = str(s)
+    return s if len(s) <= n else s[:n - 3] + "..."
+
+if tool_name == "Read":
+    f = tool_input.get("file_path", "")
+    print(f"Read {f}")
+elif tool_name == "Edit":
+    f = tool_input.get("file_path", "")
+    print(f"Edit {f}")
+elif tool_name == "Write":
+    f = tool_input.get("file_path", "")
+    print(f"Write {f}")
+elif tool_name == "Bash":
+    cmd = tool_input.get("command", "")
+    desc = tool_input.get("description", "")
+    if desc:
+        print(f"Bash: {short(desc, 60)} [{short(cmd, 60)}]")
+    else:
+        print(f"Bash: {short(cmd, 100)}")
+elif tool_name == "Grep":
+    p = tool_input.get("pattern", "")
+    print(f"Grep \"{short(p, 50)}\"")
+elif tool_name == "Glob":
+    p = tool_input.get("pattern", "")
+    print(f"Glob {p}")
+elif tool_name.startswith("mcp__"):
+    print(f"MCP: {tool_name}")
+else:
+    print(tool_name)
+' "$INPUT")
+
+# Append to activity log
+printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$SUMMARY" >> "$ACTIVITY_LOG"
+
+# ── If this was an Edit/Write, update the current-file pointer ──────────────
+TOOL_NAME=$(printf '%s' "$INPUT" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("tool_name", ""))' 2>/dev/null || echo "")
+
+if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "NotebookEdit" ]; then
+    FILE_PATH=$(printf '%s' "$INPUT" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("tool_input", {}).get("file_path", ""))' 2>/dev/null || echo "")
+    if [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
+        # Copy the file's content into the pointer so the preview block sees fresh content
+        cp "$FILE_PATH" "$CURRENT_FILE_PTR" 2>/dev/null || true
+        printf '%s\n' "$FILE_PATH" > "$LOG_DIR/current-file.path"
+    fi
+fi
+
+# Hook protocol: empty response = proceed normally
+printf '{}\n'

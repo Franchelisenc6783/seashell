@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# seashell-setup-hooks — install the Seashell hooks into Claude Code's settings.
+#
+# Adds SessionStart and PostToolUse hook entries to ~/.claude/settings.json.
+# Idempotent: skips entries that are already present.
+#
+# Run once after installing the wave-config bundle.
+
+set -euo pipefail
+
+SETTINGS="$HOME/.claude/settings.json"
+SS_HOOK="$HOME/.local/bin/seashell-session-start"
+PT_HOOK="$HOME/.local/bin/seashell-post-tool-use"
+
+say()  { printf '\033[36m▶\033[0m %s\n' "$*"; }
+ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
+err()  { printf '\033[31m✗\033[0m %s\n' "$*" >&2; }
+
+# Verify the hook scripts are installed
+for h in "$SS_HOOK" "$PT_HOOK"; do
+    if [ ! -x "$h" ]; then
+        err "hook script not executable or missing: $h"
+        echo ""
+        echo "Hint: run examples/wave-config/install.sh first to install the hook scripts."
+        exit 1
+    fi
+done
+
+# Make sure the settings file exists
+mkdir -p "$(dirname "$SETTINGS")"
+if [ ! -f "$SETTINGS" ]; then
+    printf '{}\n' > "$SETTINGS"
+fi
+
+# Backup before mutating
+cp "$SETTINGS" "$SETTINGS.backup-$(date +%Y%m%d-%H%M%S)"
+
+# Use Python for safe JSON merge (preserves user's existing keys)
+# Hook config schema:
+#   SessionStart: list of {type, command, matcher} — matcher is one of
+#       "startup" | "resume" | "clear" | "compact"
+#   PostToolUse:  list of {matcher, hooks: [{type, command}]} — matcher is
+#       a tool name pattern; we use ".*" to match all tools.
+python3 - "$SETTINGS" "$SS_HOOK" "$PT_HOOK" <<'PYEOF'
+import json, sys
+path, ss_hook, pt_hook = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(path) as f:
+    settings = json.load(f)
+
+settings.setdefault("hooks", {})
+
+def upsert_session_start(command):
+    """Add SessionStart hooks for both startup and resume matchers."""
+    existing = settings["hooks"].get("SessionStart", [])
+    if isinstance(existing, dict):
+        existing = [existing]
+    added = 0
+    for matcher in ("startup", "resume"):
+        entry = {"type": "command", "command": command, "matcher": matcher}
+        if any(
+            isinstance(e, dict)
+            and e.get("command") == command
+            and e.get("matcher") == matcher
+            for e in existing
+        ):
+            continue
+        existing.append(entry)
+        added += 1
+    settings["hooks"]["SessionStart"] = existing
+    return added
+
+def upsert_post_tool_use(command):
+    """Add PostToolUse hook with matcher='.*' to fire on all tools."""
+    existing = settings["hooks"].get("PostToolUse", [])
+    if isinstance(existing, dict):
+        existing = [existing]
+    # Look for an existing matcher block we'd be adding to
+    for entry in existing:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("matcher") != ".*":
+            continue
+        hooks = entry.setdefault("hooks", [])
+        if any(isinstance(h, dict) and h.get("command") == command for h in hooks):
+            return 0  # already there
+        hooks.append({"type": "command", "command": command})
+        return 1
+    # No suitable block — create one
+    existing.append({"matcher": ".*", "hooks": [{"type": "command", "command": command}]})
+    settings["hooks"]["PostToolUse"] = existing
+    return 1
+
+added_ss = upsert_session_start(ss_hook)
+added_pt = upsert_post_tool_use(pt_hook)
+
+with open(path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"✓ SessionStart hook: {added_ss} entry/entries added (startup + resume matchers)")
+print(f"✓ PostToolUse hook:  {added_pt} entry added (matcher='.*')")
+PYEOF
+
+ok "Hooks configured at $SETTINGS"
+echo ""
+echo "Next time you run \`claude\` (in any directory), the hooks will fire and"
+echo "Seashell will register the session at ~/.seashell/sessions/<id>.json."
+echo ""
+echo "Backup saved to: $(ls -t "$SETTINGS".backup-* 2>/dev/null | head -1)"

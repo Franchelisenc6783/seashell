@@ -1436,6 +1436,19 @@ struct Seashell: AsyncParsableCommand {
                         ]),
                         "required": .array([.string("message_id"), .string("text")])
                     ])
+                ),
+                Tool(
+                    name: "read_my_replies",
+                    description: "Browse the OUTBOUND history — replies you've previously sent via `reply_to_user`. Aggregates across the global inbox and every registered project's `replies.jsonl`. Use this to answer questions like \"what was the last thing you said in this project?\" or \"what did you tell me about X?\" without needing to manually open the file. Sorted most-recent-first.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "limit":   .object(["type": .string("string"), "description": .string("Number of recent replies to return (1-100, default: 10)")]),
+                            "search":  .object(["type": .string("string"), "description": .string("Optional substring filter on reply text (case-insensitive)")]),
+                            "project": .object(["type": .string("string"), "description": .string("Optional project label to filter by (matches the basename of project paths in ~/.seashell/projects.jsonl). Use 'global' to filter to the global inbox.")])
+                        ]),
+                        "required": .array([])
+                    ])
                 )
             ])
         }
@@ -1602,6 +1615,8 @@ struct Seashell: AsyncParsableCommand {
                 return await handleInboxHistory(params: params, logger: logger)
             case "reply_to_user":
                 return await handleReplyToUser(params: params, logger: logger)
+            case "read_my_replies":
+                return await handleReadMyReplies(params: params, logger: logger)
 
             default:
                 return CallTool.Result(

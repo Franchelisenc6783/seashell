@@ -114,6 +114,7 @@ EOF
         "mcp__seashell__inbox_history"
         "mcp__seashell__read_user_inbox"
         "mcp__seashell__reply_to_user"
+        "mcp__seashell__read_my_replies"
     )
     local started_at
     started_at=$(date +%s)

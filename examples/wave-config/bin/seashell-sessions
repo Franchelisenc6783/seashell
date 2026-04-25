@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# seashell-sessions — list and resolve Claude Code sessions
+#
+# Reads from two sources:
+#   1. ~/.seashell/sessions/<id>.json   (hook-registered sessions, with metadata)
+#   2. ~/.claude/projects/*/*.jsonl     (filesystem-discovered, all sessions)
+#
+# The dual-source design means resume-by-name works even for sessions where
+# the SessionStart hook didn't fire (e.g. claude -p invocations).
+#
+# Usage:
+#   seashell-sessions                       — list all known sessions
+#   seashell-sessions list                  — same as above
+#   seashell-sessions resolve <name>        — print the best-match session id
+#   seashell-sessions latest <name>         — latest session id for a project
+#   seashell-sessions show <id>             — full metadata for one session
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  seashell-sessions                  List all known Claude Code sessions
+  seashell-sessions list             Same as above
+  seashell-sessions resolve <name>   Print the session id whose project label
+                                     best matches <name> (fuzzy)
+  seashell-sessions latest <name>    Print only the most-recent session id
+                                     for the matching project
+  seashell-sessions show <id>        Full metadata for one session
+  seashell-sessions -h | --help      Show this help
+
+Sources:
+  Hook-registered:  ~/.seashell/sessions/<id>.json
+  Filesystem-found: ~/.claude/projects/<encoded-cwd>/<id>.jsonl
+EOF
+}
+
+cmd="${1:-list}"
+case "$cmd" in
+    -h|--help|help) usage; exit 0 ;;
+esac
+
+# All session lookup logic lives in this Python helper for clarity.
+exec python3 - "$@" <<'PYEOF'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+HOME = Path(os.environ["HOME"])
+SEASHELL_SESSIONS = HOME / ".seashell" / "sessions"
+CLAUDE_PROJECTS = HOME / ".claude" / "projects"
+
+
+def decode_project_dir(name: str) -> str:
+    """
+    Decode the directory name Claude Code uses under ~/.claude/projects/.
+    Example: '-Users-yourname-Github-MyProject' -> '/Users/yourname/Github/MyProject'
+    Heuristic: leading '-' dropped, remaining '-' become '/'.
+    """
+    if name.startswith("-"):
+        name = name[1:]
+    return "/" + name.replace("-", "/")
+
+
+def load_hook_registry():
+    registry = {}
+    if not SEASHELL_SESSIONS.is_dir():
+        return registry
+    for entry in SEASHELL_SESSIONS.iterdir():
+        if not entry.is_file() or not entry.name.endswith(".json"):
+            continue
+        try:
+            with entry.open() as f:
+                rec = json.load(f)
+        except Exception:
+            continue
+        if "id" in rec:
+            registry[rec["id"]] = rec
+    return registry
+
+
+def discover_filesystem_sessions():
+    if not CLAUDE_PROJECTS.is_dir():
+        return []
+    sessions = []
+    for project_dir in CLAUDE_PROJECTS.iterdir():
+        if not project_dir.is_dir():
+            continue
+        cwd = decode_project_dir(project_dir.name)
+        label = os.path.basename(cwd) or "(unknown)"
+        for jsonl in project_dir.glob("*.jsonl"):
+            try:
+                stat = jsonl.stat()
+            except OSError:
+                continue
+            mtime_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            sessions.append(
+                {
+                    "id": jsonl.stem,
+                    "cwd": cwd,
+                    "label": label,
+                    "last_activity": mtime_iso,
+                    "size_bytes": stat.st_size,
+                    "jsonl_path": str(jsonl),
+                }
+            )
+    return sessions
+
+
+def merge_sources():
+    hooks = load_hook_registry()
+    fs = discover_filesystem_sessions()
+    fs_by_id = {s["id"]: s for s in fs}
+    merged = []
+    for fs_rec in fs:
+        sid = fs_rec["id"]
+        merged_rec = dict(fs_rec)
+        if sid in hooks:
+            hook_rec = hooks[sid]
+            for key in ("label", "started_at", "wave_block_id", "wave_tab_id"):
+                if hook_rec.get(key):
+                    merged_rec[key] = hook_rec[key]
+            merged_rec["hook_registered"] = True
+        else:
+            merged_rec["hook_registered"] = False
+        merged.append(merged_rec)
+    seen_ids = {s["id"] for s in merged}
+    for sid, rec in hooks.items():
+        if sid in seen_ids:
+            continue
+        merged.append({**rec, "hook_registered": True, "last_activity": rec.get("started_at", "")})
+    merged.sort(key=lambda s: s.get("last_activity", ""), reverse=True)
+    return merged
+
+
+def fuzzy_match(query, sessions):
+    q = query.lower().strip()
+    scored = []
+    for s in sessions:
+        label = s.get("label", "").lower()
+        cwd = s.get("cwd", "").lower()
+        score = 0
+        if q == label:
+            score = 100
+        elif label.startswith(q):
+            score = 85
+        elif q in label:
+            score = 75
+        elif label.replace("-", "") == q.replace("-", ""):
+            score = 90
+        elif q in cwd:
+            score = 50
+        if not score:
+            initials = "".join(c for c in s.get("label", "") if c.isupper()).lower()
+            if initials and initials == q:
+                score = 95
+        if score > 0:
+            scored.append((score, s))
+    # Sort by score desc, then activity desc
+    scored.sort(key=lambda t: (t[0], t[1].get("last_activity", "")), reverse=True)
+    return [s for _, s in scored]
+
+
+def cmd_list():
+    sessions = merge_sources()
+    if not sessions:
+        print("📭 No Claude Code sessions found.")
+        print("   Start one with: claude   (in any directory)")
+        return
+    print(f"📋 Active Claude Code sessions ({len(sessions)}):\n")
+    print(f"  {'LABEL':<28} {'LAST ACTIVITY':<22} {'ID (short)':<12} CWD")
+    print(f"  {'-' * 28} {'-' * 22} {'-' * 12} {'-' * 30}")
+    for s in sessions[:30]:
+        label = s.get("label", "?")[:28]
+        last = s.get("last_activity", "")[:22]
+        sid = s["id"][:8]
+        cwd = s.get("cwd", "?")
+        marker = "★" if s.get("hook_registered") else " "
+        print(f"  {label:<28} {last:<22} {sid:<12} {cwd} {marker}")
+    if len(sessions) > 30:
+        print(f"\n  ... {len(sessions) - 30} more")
+    print("\n  ★ = registered via SessionStart hook (interactive Wave session)")
+
+
+def cmd_resolve(query, latest_only=False):
+    sessions = merge_sources()
+    matches = fuzzy_match(query, sessions)
+    if not matches:
+        print(f"✗ No session matched '{query}'", file=sys.stderr)
+        sys.exit(1)
+    if latest_only or len(matches) > 1:
+        if not latest_only and len(matches) > 1:
+            print(f"  ⚠ {len(matches)} sessions matched '{query}' — picking most recent:", file=sys.stderr)
+            for m in matches[:5]:
+                print(f"     {m.get('label')} ({m['id'][:8]}) — {m.get('last_activity')}", file=sys.stderr)
+        best = sorted(matches, key=lambda s: s.get("last_activity", ""), reverse=True)[0]
+        print(best["id"])
+    else:
+        print(matches[0]["id"])
+
+
+def cmd_show(session_id):
+    sessions = merge_sources()
+    for s in sessions:
+        if s["id"] == session_id or s["id"].startswith(session_id):
+            print(json.dumps(s, indent=2))
+            return
+    print(f"✗ No session matched id '{session_id}'", file=sys.stderr)
+    sys.exit(1)
+
+
+cmd = sys.argv[1] if len(sys.argv) > 1 else "list"
+args = sys.argv[2:]
+
+if cmd in ("list", "ls"):
+    cmd_list()
+elif cmd == "resolve":
+    if not args:
+        print("Usage: seashell-sessions resolve <name>", file=sys.stderr); sys.exit(1)
+    cmd_resolve(" ".join(args))
+elif cmd == "latest":
+    if not args:
+        print("Usage: seashell-sessions latest <name>", file=sys.stderr); sys.exit(1)
+    cmd_resolve(" ".join(args), latest_only=True)
+elif cmd == "show":
+    if not args:
+        print("Usage: seashell-sessions show <id>", file=sys.stderr); sys.exit(1)
+    cmd_show(args[0])
+else:
+    print(f"Unknown command: {cmd}", file=sys.stderr); sys.exit(1)
+PYEOF

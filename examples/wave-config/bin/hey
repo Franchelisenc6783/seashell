@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# hey — natural-language entry point for Seashell
+#
+# Two intents:
+#   1. CONTINUE / RESUME — looks up the project's most recent Claude session
+#      and exec's `claude --resume <id>` in this terminal.
+#   2. ASK — anything else routes to seashell-ask (post to inbox, await reply).
+#
+# Usage:
+#   hey continue with CurrentTraderPro
+#   hey resume ctp
+#   hey let's work on the seashell project
+#   hey what was the last refactoring decision we made
+#   swift build 2>&1 | hey "fix these errors"
+
+set -euo pipefail
+
+show_help() {
+    cat <<'EOF'
+Usage:
+  hey continue with <project>      Resume that project's most recent session
+  hey resume <project>             Same as continue
+  hey let's work on <project>      Same as continue
+  hey <natural-language>           Sends to seashell-ask (inbox) for reply
+  hey -h | --help                  Show this help
+
+Examples:
+  hey continue with CurrentTraderPro
+  hey resume ctp
+  hey let's work on the bug ticket
+  hey what was the last reply you sent in CurrentTraderPro
+  swift build 2>&1 | hey "fix these errors"
+EOF
+}
+
+# Explicit help flag
+case "${1:-}" in
+    -h|--help) show_help; exit 0 ;;
+esac
+
+# No args + interactive shell → show help (not the inbox flow)
+if [ $# -eq 0 ] && [ -t 0 ]; then
+    show_help; exit 0
+fi
+
+text="$*"
+
+# Helper: try to resume a session by project name
+do_resume() {
+    local project="$1"
+    # Trim trailing punctuation and common suffixes ("session", "project")
+    project=$(printf '%s' "$project" | sed -E -e 's/[\.,?! ]+$//' \
+                                              -e 's/[[:space:]]+(session|project)$//I')
+    if [ -z "$project" ]; then
+        printf 'Usage: hey continue with <project-name>\n' >&2
+        exit 1
+    fi
+
+    local sid
+    if ! sid=$(seashell-sessions latest "$project" 2>/dev/null); then
+        printf '\033[31m✗\033[0m No session matched %s\n' "'$project'" >&2
+        printf '\nAvailable sessions:\n' >&2
+        seashell-sessions list 2>&1 | head -15 >&2
+        exit 1
+    fi
+
+    printf '\033[36m🔄 Resuming session %s (project: %s)...\033[0m\n' "${sid:0:8}" "$project"
+    exec claude --resume "$sid"
+}
+
+# ── Intent detection ──────────────────────────────────────────────────────────
+# We only look at the first word(s) for resume intent. Everything else
+# (including stdin pipes) falls through to seashell-ask.
+
+# Lowercase a copy for matching (preserves the original $text for seashell-ask)
+text_lc=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
+
+case "$text_lc" in
+    "continue with "*)
+        project="${text:14}"; do_resume "$project" ;;
+    "continue working on "*|"continue working with "*)
+        project="${text:21}"; do_resume "$project" ;;
+    "continue "*)
+        # Bare "continue X" — only resume if X looks like a project name (no question mark, etc.)
+        rest="${text:9}"
+        if printf '%s' "$rest" | grep -qE '\?|^the |^our '; then
+            : # not a resume — let it fall through (e.g. "continue our discussion")
+        else
+            do_resume "$rest"
+        fi
+        ;;
+    "resume "*)
+        project="${text:7}"; do_resume "$project" ;;
+    "let's work on "*|"lets work on "*|"let us work on "*)
+        # Trim the leading phrase
+        project=$(printf '%s' "$text" | sed -E "s/^[Ll]et[s']? [Uu]?[Ss]? ?[Ww]ork [Oo]n //")
+        do_resume "$project" ;;
+    "go back to "*|"pick up "*)
+        project=$(printf '%s' "$text" | sed -E -e 's/^[Gg]o [Bb]ack [Tt]o //' -e 's/^[Pp]ick [Uu]p //')
+        do_resume "$project" ;;
+esac
+
+# ── Fall-through: route to seashell-ask ───────────────────────────────────────
+# Stdin (if piped) passes through naturally to seashell-ask.
+exec seashell-ask "$text"
