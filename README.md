@@ -2,7 +2,7 @@
 
 <img src="assets/logo.svg" alt="Seashell logo" width="200"/>
 
-# Seashell
+# SeaShell
 
 **An MCP server that brings Claude into Wave Terminal.**
 
