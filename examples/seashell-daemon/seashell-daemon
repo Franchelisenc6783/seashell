@@ -103,10 +103,21 @@ Be concise. The user is reading replies in their terminal.
 EOF
 )
 
-    # Use a short Claude session — no interactive flags, capture exit
+    # Restrict claude to ONLY the 4 inbox tools — can't accidentally call
+    # Bash/Edit/Write/destructive seashell tools. Permission mode dontAsk
+    # ensures no TTY prompts (the daemon has no interactive terminal).
+    local allowed_tools=(
+        "mcp__seashell__inbox_count"
+        "mcp__seashell__inbox_history"
+        "mcp__seashell__read_user_inbox"
+        "mcp__seashell__reply_to_user"
+    )
     local started_at
     started_at=$(date +%s)
-    if (cd "$cwd" && claude -p "$prompt" >> "$LOG_FILE" 2>&1); then
+    if (cd "$cwd" && claude -p \
+            --allowed-tools "${allowed_tools[*]}" \
+            --permission-mode dontAsk \
+            "$prompt" >> "$LOG_FILE" 2>&1); then
         local elapsed=$(($(date +%s) - started_at))
         log "  ✓ claude responded (${elapsed}s)"
     else
