@@ -105,9 +105,19 @@ mkdir -p "$HOME/.config/fastfetch"
 cp "$SCRIPT_DIR/fastfetch/config.jsonc" "$HOME/.config/fastfetch/config.jsonc"
 ok "fastfetch config installed"
 
-# ── 4. Install wave-theme-sync ──────────────────────────────────────────────
-say "Installing wave-theme-sync to ~/.local/bin/"
+# ── 4. Install Seashell shell commands (msg / ask / init) ──────────────────
+say "Installing Seashell commands to ~/.local/bin/ (seashell-msg, seashell-ask, seashell-init)"
 mkdir -p "$HOME/.local/bin"
+for cmd in seashell-msg seashell-ask seashell-init; do
+    cp "$SCRIPT_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
+    chmod +x "$HOME/.local/bin/$cmd"
+done
+# Remove the obsolete fish function from a previous install if present
+rm -f "$HOME/.config/fish/functions/seashell-msg.fish"
+ok "Seashell commands installed"
+
+# ── 5. Install wave-theme-sync ──────────────────────────────────────────────
+say "Installing wave-theme-sync to ~/.local/bin/"
 cp "$SCRIPT_DIR/theme-sync/wave-theme-sync" "$HOME/.local/bin/wave-theme-sync"
 chmod +x "$HOME/.local/bin/wave-theme-sync"
 ok "wave-theme-sync installed"

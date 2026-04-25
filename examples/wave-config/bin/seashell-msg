@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# seashell-msg — leave Claude a note from any terminal
+#
+# Routing: walks up from $PWD to find the nearest .seashell-inbox/ ancestor.
+# If found, the note goes there. Otherwise, falls back to ~/.seashell/inbox.jsonl
+# (the global inbox).
+#
+# Usage:
+#   seashell-msg "context note"
+#   command | seashell-msg "context"
+#   seashell-msg --file path/to/log.txt "investigate this"
+#   seashell-msg --global "send to global even from inside a project"
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  seashell-msg [options] [text]
+  command | seashell-msg [options] [text]
+
+Options:
+  --file <path>     Attach a file (can be repeated)
+  --global          Force write to global inbox (skip cwd routing)
+  --reply-token T   Internal — used by seashell-ask
+  -h, --help        Show this help
+
+Examples:
+  seashell-msg "compare the test output to what we discussed"
+  swift build 2>&1 | seashell-msg "fix these errors"
+  seashell-msg --file /tmp/build.log "investigate this"
+
+Routing:
+  Notes go to the nearest .seashell-inbox/ ancestor of the current
+  directory. Run `seashell-init` in a project root to create one.
+  If no project marker is found, notes fall back to ~/.seashell/.
+EOF
+}
+
+# ── find_inbox_dir: walk up from $PWD to find a .seashell-inbox/ ancestor ────
+find_inbox_dir() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+        if [ -d "$dir/.seashell-inbox" ]; then
+            echo "$dir/.seashell-inbox"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+    return 1
+}
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+files=()
+text_parts=()
+use_global=0
+reply_token=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --file|-f)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "seashell-msg: --file needs a path argument" >&2; exit 1
+            fi
+            files+=("$1"); shift ;;
+        --global)
+            use_global=1; shift ;;
+        --reply-token)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "seashell-msg: --reply-token needs a value" >&2; exit 1
+            fi
+            reply_token="$1"; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        --)
+            shift; text_parts+=("$@"); break ;;
+        *)
+            text_parts+=("$1"); shift ;;
+    esac
+done
+
+text="${text_parts[*]:-}"
+
+# ── Pipe support ─────────────────────────────────────────────────────────────
+if [ ! -t 0 ]; then
+    piped=$(cat)
+    if [ -n "$piped" ]; then
+        if [ -n "$text" ]; then
+            text=$(printf '%s\n\n--- piped input ---\n%s' "$text" "$piped")
+        else
+            text="$piped"
+        fi
+    fi
+fi
+
+if [ -z "$text" ] && [ ${#files[@]} -eq 0 ]; then
+    usage >&2
+    exit 1
+fi
+
+# ── Determine inbox directory ────────────────────────────────────────────────
+if [ "$use_global" -eq 1 ]; then
+    inbox_dir="$HOME/.seashell"
+    inbox_label="global"
+elif inbox_found=$(find_inbox_dir 2>/dev/null) && [ -n "$inbox_found" ]; then
+    inbox_dir="$inbox_found"
+    inbox_label=$(basename "$(dirname "$inbox_dir")")
+else
+    inbox_dir="$HOME/.seashell"
+    inbox_label="global"
+fi
+mkdir -p "$inbox_dir"
+inbox_file="$inbox_dir/inbox.jsonl"
+
+# ── Build the JSON record via python3 (correct escaping for any text) ────────
+files_joined=""
+if [ ${#files[@]} -gt 0 ]; then
+    files_joined=$(IFS='|'; echo "${files[*]}")
+fi
+
+record=$(python3 -c '
+import json, os, sys, datetime, uuid
+text = sys.argv[1]
+files = sys.argv[2].split("|") if sys.argv[2] else []
+reply_token = sys.argv[3]
+record = {
+    "id": str(uuid.uuid4()),
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "cwd": os.environ.get("PWD", os.getcwd()),
+    "hostname": os.uname().nodename,
+    "text": text,
+    "read": False,
+}
+if files:
+    record["attachments"] = [
+        {"type": "directory" if os.path.isdir(p) else "file", "path": os.path.abspath(p)}
+        for p in files
+    ]
+if reply_token:
+    record["reply_token"] = reply_token
+print(json.dumps(record))
+' "$text" "$files_joined" "$reply_token")
+
+if [ -z "$record" ]; then
+    echo "seashell-msg: failed to build record (is python3 installed?)" >&2
+    exit 1
+fi
+
+echo "$record" >> "$inbox_file"
+
+count=$(wc -l < "$inbox_file" 2>/dev/null | tr -d ' ')
+attach_note=""
+if [ ${#files[@]} -gt 0 ]; then
+    plural=""
+    [ "${#files[@]}" -ne 1 ] && plural="s"
+    attach_note=" (${#files[@]} attachment${plural})"
+fi
+
+# Print the message id when --reply-token was set (used by seashell-ask)
+if [ -n "$reply_token" ]; then
+    echo "$record" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["id"])'
+else
+    echo "📨 Note left for Claude in ${inbox_label}${attach_note} (inbox: ${count} unread)" >&2
+fi

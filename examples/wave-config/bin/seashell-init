@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# seashell-init — register the current directory as a Seashell project
+#
+# Creates:
+#   .seashell-inbox/                        per-project inbox dir
+#   .seashell-inbox/.gitignore              ignores all but README
+#   .seashell-inbox/README.md               brief explainer
+#
+# And appends an entry to:
+#   ~/.seashell/projects.jsonl              registry Claude reads via discovery
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  seashell-init [path]
+
+If path is omitted, uses the current directory.
+
+What it does:
+  1. Creates `.seashell-inbox/` in the project root
+  2. Adds an entry to ~/.seashell/projects.jsonl so Claude's
+     `read_user_inbox` tool knows to check this project
+  3. Writes a CLAUDE.md hint (if CLAUDE.md doesn't already exist)
+EOF
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage; exit 0
+fi
+
+# Resolve project path
+if [ $# -gt 0 ] && [ -n "$1" ]; then
+    project_path=$(cd "$1" && pwd)
+else
+    project_path="$PWD"
+fi
+
+if [ ! -d "$project_path" ]; then
+    echo "seashell-init: $project_path is not a directory" >&2
+    exit 1
+fi
+
+project_name=$(basename "$project_path")
+
+# 1. Create .seashell-inbox/
+inbox_dir="$project_path/.seashell-inbox"
+if [ -d "$inbox_dir" ]; then
+    echo "✓ .seashell-inbox/ already exists at $inbox_dir"
+else
+    mkdir -p "$inbox_dir"
+    echo "✓ Created $inbox_dir"
+fi
+
+# 2. Add a .gitignore inside .seashell-inbox/ so its contents aren't tracked
+gitignore="$inbox_dir/.gitignore"
+if [ ! -f "$gitignore" ]; then
+    cat > "$gitignore" <<'EOF'
+# Seashell inbox — local-only, never committed
+*.jsonl
+*.processing.jsonl
+EOF
+fi
+
+# 3. Add a README inside .seashell-inbox/
+readme="$inbox_dir/README.md"
+if [ ! -f "$readme" ]; then
+    cat > "$readme" <<EOF
+# .seashell-inbox/
+
+Per-project inbox for Seashell — see https://github.com/M-Pineapple/seashell.
+
+Notes left in this project's directory tree (via \`seashell-msg\` or
+\`seashell-ask\`) land in \`inbox.jsonl\` here. Claude (or the seashell
+daemon) drains them, archives to \`inbox.archive.jsonl\`, and writes
+replies to \`replies.jsonl\`.
+
+This directory is local-only — \`.gitignore\` excludes the JSONL files.
+You can safely commit this README.
+EOF
+fi
+
+# 4. Register the project in ~/.seashell/projects.jsonl
+mkdir -p "$HOME/.seashell"
+registry="$HOME/.seashell/projects.jsonl"
+already_registered=0
+if [ -f "$registry" ]; then
+    if python3 -c '
+import json, sys
+target = sys.argv[1]
+with open(sys.argv[2]) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("path") == target:
+            sys.exit(0)
+sys.exit(1)
+' "$project_path" "$registry" 2>/dev/null; then
+        already_registered=1
+    fi
+fi
+
+if [ "$already_registered" -eq 1 ]; then
+    echo "✓ Project already registered: $project_name"
+else
+    entry=$(python3 -c '
+import json, sys, datetime
+print(json.dumps({
+    "path": sys.argv[1],
+    "name": sys.argv[2],
+    "added_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}))
+' "$project_path" "$project_name")
+    echo "$entry" >> "$registry"
+    echo "✓ Registered $project_name in $registry"
+fi
+
+# 5. Write CLAUDE.md hint if missing or extend if present
+claude_md="$project_path/CLAUDE.md"
+hint_marker="<!-- seashell:inbox-hint -->"
+
+if [ -f "$claude_md" ] && grep -q "$hint_marker" "$claude_md" 2>/dev/null; then
+    echo "✓ CLAUDE.md already has Seashell inbox hint"
+else
+    {
+        [ -f "$claude_md" ] && echo ""
+        cat <<EOF
+$hint_marker
+## Seashell inbox
+
+This project has a Seashell inbox at \`.seashell-inbox/\`. When the user's chat
+message is brief or implies they were elsewhere ("?", "continue", "check
+inbox", or after a long pause), call \`inbox_count\` first; if there's anything
+pending, call \`read_user_inbox\` and respond. If a returned message has a
+\`reply_token\`, answer via \`reply_to_user\` so the user's blocking
+\`seashell-ask\` shell command unblocks with your reply.
+EOF
+    } >> "$claude_md"
+    if [ -f "$claude_md" ] && [ "$(wc -l < "$claude_md")" -le 12 ]; then
+        echo "✓ Created CLAUDE.md with Seashell inbox hint"
+    else
+        echo "✓ Appended Seashell inbox hint to CLAUDE.md"
+    fi
+fi
+
+echo ""
+echo "🐚 Project '$project_name' is now wired up."
+echo ""
+echo "Try it out:"
+echo "  seashell-msg \"hello from $project_name\""
+echo "  seashell-ask \"what's the next thing to work on?\""

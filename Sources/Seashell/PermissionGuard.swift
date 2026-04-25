@@ -63,6 +63,12 @@ struct PermissionGuard {
         "wave_secret_set":     .approve,
         "wave_secret_get":     .approve,
         "wave_secret_delete":  .approve,
+
+        // ── Tier A: inbox (user → Claude messages) ─────────────────────────
+        "read_user_inbox":     .safe,
+        "inbox_count":         .safe,
+        "inbox_history":       .safe,
+        "reply_to_user":       .safe,
     ]
 
     // MARK: Public API

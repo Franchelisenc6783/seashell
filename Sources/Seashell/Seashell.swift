@@ -1391,6 +1391,51 @@ struct Seashell: AsyncParsableCommand {
                         ]),
                         "required": .array([.string("tab_id")])
                     ])
+                ),
+                // ── Inbox tools — let the user leave Claude notes from Wave Terminal ──
+                Tool(
+                    name: "read_user_inbox",
+                    description: "Drain unread notes the user left for Claude via the `seashell-msg` shell command. Aggregates across the global inbox (~/.seashell/inbox.jsonl) AND every registered project inbox (.seashell-inbox/inbox.jsonl in each project root). Each note carries a timestamp, working directory, project label, and (optionally) attachments + a reply_token. Read messages are archived. Call this when the user's chat message is brief or implies they were elsewhere (e.g. \"?\", \"continue\", \"check inbox\"). If any returned message has a reply_token, you should answer via reply_to_user.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([:]),
+                        "required": .array([])
+                    ])
+                ),
+                Tool(
+                    name: "inbox_count",
+                    description: "Cheap peek across the global inbox + every registered project inbox. Returns total unread count, age of the oldest message, and a per-project breakdown. Call before `read_user_inbox` if you only want to know whether anything is waiting.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([:]),
+                        "required": .array([])
+                    ])
+                ),
+                Tool(
+                    name: "inbox_history",
+                    description: "Browse archived messages across all inboxes (global + every registered project). Sorted most-recent-first.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "limit":   .object(["type": .string("string"), "description": .string("Number of recent messages to return (1-100, default: 20)")]),
+                            "search":  .object(["type": .string("string"), "description": .string("Optional substring filter on message text (case-insensitive)")]),
+                            "project": .object(["type": .string("string"), "description": .string("Optional project label to filter by (matches the basename of project paths in ~/.seashell/projects.jsonl)")])
+                        ]),
+                        "required": .array([])
+                    ])
+                ),
+                Tool(
+                    name: "reply_to_user",
+                    description: "Post a reply to a user inbox message. Use this when a message returned by `read_user_inbox` had a `reply_token` — that means the user invoked `seashell-ask` and is blocking on your answer. The reply is written to the appropriate `replies.jsonl` (global or per-project) and `seashell-ask` picks it up within ~1 second. If the user just left a note via `seashell-msg` (no reply_token), no reply call is needed — answer in chat normally.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "message_id":   .object(["type": .string("string"), "description": .string("The id field from the original inbox record (required)")]),
+                            "text":         .object(["type": .string("string"), "description": .string("Your reply text — what the user will see in their terminal (required)")]),
+                            "project_path": .object(["type": .string("string"), "description": .string("Optional absolute project path to scope the reply to. If omitted, Seashell auto-detects from the message id by searching archives.")])
+                        ]),
+                        "required": .array([.string("message_id"), .string("text")])
+                    ])
                 )
             ])
         }
@@ -1547,6 +1592,16 @@ struct Seashell: AsyncParsableCommand {
                 return await handleWaveCreateFishWidget(params: params, logger: logger, config: config)
             case "wave_bootstrap_workspace":
                 return await handleWaveBootstrapWorkspace(params: params, logger: logger, config: config)
+
+            // ── Inbox tools ──────────────────────────────────────────
+            case "read_user_inbox":
+                return await handleReadUserInbox(params: params, logger: logger)
+            case "inbox_count":
+                return await handleInboxCount(params: params, logger: logger)
+            case "inbox_history":
+                return await handleInboxHistory(params: params, logger: logger)
+            case "reply_to_user":
+                return await handleReplyToUser(params: params, logger: logger)
 
             default:
                 return CallTool.Result(

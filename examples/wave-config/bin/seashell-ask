@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# seashell-ask — post a question to Claude and BLOCK until a reply arrives
+#
+# Routing matches seashell-msg: walks up from $PWD to find the nearest
+# .seashell-inbox/ ancestor, falls back to global.
+#
+# Usage:
+#   seashell-ask "what's the update on the refactoring?"
+#   command | seashell-ask "what does this output mean?"
+#   seashell-ask --timeout 60 "wait up to 1 minute for a reply"
+#   seashell-ask --file /tmp/x.log "explain this"
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  seashell-ask [options] [text]
+  command | seashell-ask [options] [text]
+
+Options:
+  --file <path>     Attach a file (can be repeated)
+  --global          Force write to global inbox
+  --timeout N       Max seconds to wait for a reply (default: 600 = 10 min)
+  --no-wait         Post the question, print the message_id, exit (don't block)
+  -h, --help        Show this help
+
+How it works:
+  1. Posts a question to the inbox with a unique reply_token
+  2. Polls the corresponding replies.jsonl every 0.5 seconds
+  3. When a reply with matching message_id appears, prints it and exits
+
+If no reply arrives within --timeout seconds, exits with code 124.
+
+Note: requires Claude (in Claude Desktop, Claude Code, or the seashell daemon)
+to be active. If nothing is processing the inbox, this command will time out.
+EOF
+}
+
+# Locate seashell-msg in PATH or alongside this script
+locate_seashell_msg() {
+    local self_dir
+    self_dir=$(cd "$(dirname "$0")" && pwd)
+    if [ -x "$self_dir/seashell-msg" ]; then
+        echo "$self_dir/seashell-msg"
+    elif command -v seashell-msg >/dev/null 2>&1; then
+        command -v seashell-msg
+    else
+        return 1
+    fi
+}
+
+find_inbox_dir() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ] && [ -n "$dir" ]; do
+        if [ -d "$dir/.seashell-inbox" ]; then
+            echo "$dir/.seashell-inbox"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+    return 1
+}
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+files=()
+text_parts=()
+use_global=0
+timeout_secs=600
+no_wait=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --file|-f)
+            shift
+            if [ $# -eq 0 ]; then echo "seashell-ask: --file needs a path" >&2; exit 1; fi
+            files+=("$1"); shift ;;
+        --global)
+            use_global=1; shift ;;
+        --timeout)
+            shift
+            if [ $# -eq 0 ]; then echo "seashell-ask: --timeout needs a value" >&2; exit 1; fi
+            timeout_secs="$1"; shift ;;
+        --no-wait)
+            no_wait=1; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        --)
+            shift; text_parts+=("$@"); break ;;
+        *)
+            text_parts+=("$1"); shift ;;
+    esac
+done
+
+text="${text_parts[*]:-}"
+
+# Pipe support — read stdin if it's not a TTY
+piped=""
+if [ ! -t 0 ]; then
+    piped=$(cat)
+fi
+
+if [ -z "$text" ] && [ -z "$piped" ] && [ ${#files[@]} -eq 0 ]; then
+    usage >&2
+    exit 1
+fi
+
+# Combine text + piped via the same logic seashell-msg uses
+if [ -n "$piped" ]; then
+    if [ -n "$text" ]; then
+        text=$(printf '%s\n\n--- piped input ---\n%s' "$text" "$piped")
+    else
+        text="$piped"
+    fi
+fi
+
+# Generate reply token (random hex)
+reply_token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+
+# Locate seashell-msg
+seashell_msg=$(locate_seashell_msg) || {
+    echo "seashell-ask: cannot find seashell-msg in PATH or alongside" >&2
+    exit 1
+}
+
+# Determine the inbox dir we'll be polling for replies
+if [ "$use_global" -eq 1 ]; then
+    inbox_dir="$HOME/.seashell"
+    inbox_label="global"
+elif inbox_found=$(find_inbox_dir 2>/dev/null) && [ -n "$inbox_found" ]; then
+    inbox_dir="$inbox_found"
+    inbox_label=$(basename "$(dirname "$inbox_dir")")
+else
+    inbox_dir="$HOME/.seashell"
+    inbox_label="global"
+fi
+replies_file="$inbox_dir/replies.jsonl"
+
+# Post the question via seashell-msg --reply-token
+# (We pass --reply-token, --file flags, and --global if needed; seashell-msg
+#  outputs the message id to stdout when --reply-token is set.)
+post_args=("--reply-token" "$reply_token")
+[ "$use_global" -eq 1 ] && post_args+=("--global")
+for f in "${files[@]:-}"; do
+    [ -n "$f" ] && post_args+=("--file" "$f")
+done
+
+if [ -n "$text" ]; then
+    message_id=$(echo "$text" | "$seashell_msg" "${post_args[@]}")
+else
+    message_id=$("$seashell_msg" "${post_args[@]}" </dev/null)
+fi
+
+if [ -z "$message_id" ]; then
+    echo "seashell-ask: seashell-msg did not return a message_id" >&2
+    exit 1
+fi
+
+if [ "$no_wait" -eq 1 ]; then
+    echo "📨 Posted message_id=$message_id to $inbox_label"
+    echo "$message_id"
+    exit 0
+fi
+
+# ── Poll for reply ───────────────────────────────────────────────────────────
+printf "⏳ Waiting for Claude to respond (timeout: %ss)..." "$timeout_secs" >&2
+start_ts=$(date +%s)
+poll_interval=0.5
+
+while :; do
+    # Check timeout
+    now=$(date +%s)
+    elapsed=$((now - start_ts))
+    if [ "$elapsed" -ge "$timeout_secs" ]; then
+        echo "" >&2
+        echo "⏰ Timed out after ${timeout_secs}s waiting for reply to $message_id" >&2
+        exit 124
+    fi
+
+    # Check replies.jsonl for our message_id
+    if [ -f "$replies_file" ]; then
+        reply_text=$(python3 -c "
+import json, sys
+target = sys.argv[1]
+path = sys.argv[2]
+try:
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try:
+                rec = json.loads(line)
+                if rec.get('message_id') == target:
+                    print(rec.get('text', ''))
+                    sys.exit(0)
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    pass
+sys.exit(1)
+" "$message_id" "$replies_file" 2>/dev/null) && {
+            # Reply found
+            echo "" >&2
+            echo "" >&2
+            printf '%s\n' "$reply_text"
+            exit 0
+        }
+    fi
+
+    # Spinner tick
+    printf "." >&2
+    sleep "$poll_interval"
+done

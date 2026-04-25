@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for seashell-daemon.
+
+  Install via examples/seashell-daemon/install.sh, which substitutes
+  REPLACE_HOME with your absolute home path before loading.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.seashell.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPLACE_HOME/.local/bin/seashell-daemon</string>
+        <string>run</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/seashell-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/seashell-daemon.log</string>
+
+    <!-- PATH must include claude, python3, and other tools -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>REPLACE_HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>REPLACE_HOME</string>
+    </dict>
+</dict>
+</plist>

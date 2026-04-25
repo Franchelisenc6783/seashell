@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# seashell-daemon — autonomous inbox responder using Claude Code (`claude -p`)
+#
+# Polls the global inbox + every registered project inbox. When unread messages
+# appear, spawns `claude -p` from the appropriate project directory to read and
+# respond via the Seashell MCP tools.
+#
+# Uses your Claude.ai subscription (no API key needed) — see README.md.
+
+set -euo pipefail
+
+LOG_FILE="${SEASHELL_DAEMON_LOG:-/tmp/seashell-daemon.log}"
+POLL_INTERVAL="${SEASHELL_DAEMON_POLL:-5}"
+CLAUDE_TIMEOUT="${SEASHELL_DAEMON_CLAUDE_TIMEOUT:-120}"
+
+log() {
+    printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG_FILE"
+}
+
+count_unread() {
+    local inbox="$1"
+    [ -f "$inbox" ] || { echo 0; return; }
+    python3 -c '
+import json, sys
+count = 0
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try:
+                if not json.loads(line).get("read", False):
+                    count += 1
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    pass
+print(count)
+' "$inbox"
+}
+
+# Yields each inbox we should watch as "<inbox_dir>|<cwd>"
+get_inboxes() {
+    # Global inbox first
+    echo "$HOME/.seashell|$HOME"
+    # Every registered project
+    if [ -f "$HOME/.seashell/projects.jsonl" ]; then
+        python3 -c '
+import json, sys, os
+try:
+    with open(sys.argv[1]) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            path = e.get("path", "")
+            if path and os.path.isdir(path):
+                print(f"{path}/.seashell-inbox|{path}")
+except FileNotFoundError:
+    pass
+' "$HOME/.seashell/projects.jsonl"
+    fi
+}
+
+check_claude_cli() {
+    if ! command -v claude >/dev/null 2>&1; then
+        log "ERROR: 'claude' CLI not found in PATH."
+        log "       Install Claude Code (see https://docs.claude.com/claude-code)"
+        log "       and authenticate with 'claude auth login'."
+        return 1
+    fi
+}
+
+process_inbox() {
+    local inbox_dir="$1"
+    local cwd="$2"
+    local inbox_file="$inbox_dir/inbox.jsonl"
+
+    local unread
+    unread=$(count_unread "$inbox_file")
+    if [ "$unread" -eq 0 ]; then
+        return 0
+    fi
+
+    log "[$cwd] $unread unread → invoking claude"
+
+    # Compose a prompt that tells Claude exactly what to do via Seashell MCP tools
+    local prompt
+    prompt=$(cat <<EOF
+You have $unread unread Seashell inbox message(s) waiting in this project.
+
+Use the Seashell MCP tools to handle them:
+1. Call read_user_inbox to drain the unread queue (this also archives them).
+2. For each returned message:
+   - If it has a reply_token, that means the user is blocking on seashell-ask.
+     Answer the question and call reply_to_user with the message_id and your text.
+   - If it has no reply_token, the user just left a note (fire-and-forget). Read it for context but no reply call is needed.
+
+Be concise. The user is reading replies in their terminal.
+EOF
+)
+
+    # Use a short Claude session — no interactive flags, capture exit
+    local started_at
+    started_at=$(date +%s)
+    if (cd "$cwd" && claude -p "$prompt" >> "$LOG_FILE" 2>&1); then
+        local elapsed=$(($(date +%s) - started_at))
+        log "  ✓ claude responded (${elapsed}s)"
+    else
+        local rc=$?
+        log "  ✗ claude exit $rc"
+    fi
+}
+
+run_loop() {
+    log "seashell-daemon starting (poll: ${POLL_INTERVAL}s, claude timeout: ${CLAUDE_TIMEOUT}s)"
+    check_claude_cli || exit 1
+
+    while :; do
+        while IFS='|' read -r inbox_dir cwd; do
+            process_inbox "$inbox_dir" "$cwd" || true
+        done < <(get_inboxes)
+        sleep "$POLL_INTERVAL"
+    done
+}
+
+run_once() {
+    check_claude_cli || exit 1
+    log "seashell-daemon --once: single pass"
+    while IFS='|' read -r inbox_dir cwd; do
+        process_inbox "$inbox_dir" "$cwd" || true
+    done < <(get_inboxes)
+    log "single pass complete"
+}
+
+usage() {
+    cat <<'EOF'
+seashell-daemon — autonomous inbox responder via Claude Code (claude -p)
+
+USAGE:
+  seashell-daemon          Run the polling loop (default)
+  seashell-daemon once     Run a single iteration and exit
+  seashell-daemon list     Show inboxes the daemon would watch
+  seashell-daemon -h       Show this help
+
+ENVIRONMENT:
+  SEASHELL_DAEMON_LOG               Log file path (default: /tmp/seashell-daemon.log)
+  SEASHELL_DAEMON_POLL              Poll interval in seconds (default: 5)
+  SEASHELL_DAEMON_CLAUDE_TIMEOUT    Max seconds per claude invocation (default: 120)
+
+REQUIREMENTS:
+  - Claude Code CLI (`claude`), authenticated via `claude auth login`
+  - python3
+  - The `seashell` MCP server registered with the same Claude Code config
+
+LOGS:
+  tail -f /tmp/seashell-daemon.log
+EOF
+}
+
+case "${1:-run}" in
+    run|--run)         run_loop ;;
+    once|--once)       run_once ;;
+    list|--list)
+        echo "Inboxes the daemon will watch:"
+        while IFS='|' read -r inbox_dir cwd; do
+            local_unread=$(count_unread "$inbox_dir/inbox.jsonl")
+            echo "  $inbox_dir  (cwd: $cwd, unread: $local_unread)"
+        done < <(get_inboxes)
+        ;;
+    -h|--help|help)    usage ;;
+    *)
+        echo "Unknown command: $1" >&2
+        usage >&2
+        exit 1 ;;
+esac
