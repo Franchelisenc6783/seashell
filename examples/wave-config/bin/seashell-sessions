@@ -102,6 +102,11 @@ def discover_filesystem_sessions():
             continue
         cwd = decode_project_dir(project_dir.name)
         label = os.path.basename(cwd) or "(unknown)"
+        # Mark sessions whose original cwd no longer exists on disk as stale.
+        # Claude Code can't resume from a non-existent cwd, and these old
+        # entries pollute fuzzy matching (e.g. a deleted /tmp test dir whose
+        # path happens to contain a project name).
+        cwd_exists = Path(cwd).is_dir()
         for jsonl in project_dir.glob("*.jsonl"):
             try:
                 stat = jsonl.stat()
@@ -118,6 +123,7 @@ def discover_filesystem_sessions():
                     "last_activity": mtime_iso,
                     "size_bytes": stat.st_size,
                     "jsonl_path": str(jsonl),
+                    "stale_cwd": not cwd_exists,
                 }
             )
     return sessions
@@ -191,12 +197,18 @@ def merge_sources():
     for sid, rec in hooks.items():
         if sid in seen_ids:
             continue
-        merged.append({**rec, "hook_registered": True, "last_activity": rec.get("started_at", "")})
+        cwd = rec.get("cwd", "")
+        merged.append({
+            **rec,
+            "hook_registered": True,
+            "last_activity": rec.get("started_at", ""),
+            "stale_cwd": bool(cwd) and not Path(cwd).is_dir(),
+        })
     merged.sort(key=lambda s: s.get("last_activity", ""), reverse=True)
     return merged
 
 
-def fuzzy_match(query, sessions, include_archived=False):
+def fuzzy_match(query, sessions, include_archived=False, include_stale=False):
     q = query.lower().strip()
     # Strip leading articles/possessives — "the weather app" should
     # match the same set as "weather app".
@@ -214,6 +226,13 @@ def fuzzy_match(query, sessions, include_archived=False):
         # the user meant. Pass include_archived=True for `list` so they're
         # still visible (with a marker), just not picked.
         if not include_archived and s.get("archived"):
+            continue
+        # Skip stale-cwd sessions by default — Claude Code can't resume from
+        # a non-existent directory, and old test dirs whose paths happen to
+        # contain a project name (e.g. `/tmp/myproject-test/`) would otherwise
+        # win fuzzy matches via cwd substring. Pass include_stale=True for
+        # `list` to still show them with a marker.
+        if not include_stale and s.get("stale_cwd"):
             continue
 
         label = s.get("label", "").lower()
@@ -271,11 +290,12 @@ def cmd_list():
         print("   Start one with: claude   (in any directory)")
         return
     n_archived = sum(1 for s in sessions if s.get("archived"))
-    n_active = len(sessions) - n_archived
-    if n_archived:
-        print(f"📋 Claude Code sessions: {n_active} active, {n_archived} archived\n")
-    else:
-        print(f"📋 Active Claude Code sessions ({len(sessions)}):\n")
+    n_stale    = sum(1 for s in sessions if s.get("stale_cwd"))
+    n_active   = len(sessions) - n_archived - n_stale
+    summary_parts = [f"{n_active} active"]
+    if n_archived: summary_parts.append(f"{n_archived} archived")
+    if n_stale:    summary_parts.append(f"{n_stale} stale-cwd")
+    print(f"📋 Claude Code sessions: {', '.join(summary_parts)}\n")
     print(f"  {'LABEL / DESKTOP TITLE':<40} {'LAST':<11} {'ID':<10} CWD")
     print(f"  {'-' * 40} {'-' * 11} {'-' * 10} {'-' * 30}")
     for s in sessions[:40]:
@@ -288,11 +308,12 @@ def cmd_list():
         last = s.get("last_activity", "")[:10]   # YYYY-MM-DD
         sid = s["id"][:8]
         cwd = s.get("cwd", "?")
-        # Markers: ★ hook-registered, A archived
+        # Markers: ★ hook-registered, A archived, S stale-cwd
         markers = ""
         if s.get("hook_registered"): markers += "★"
         if s.get("archived"):        markers += "A"
-        markers = markers.ljust(2)
+        if s.get("stale_cwd"):       markers += "S"
+        markers = markers.ljust(3)
         print(f"  {display:<40} {last:<11} {sid:<10} {cwd}  {markers}")
     if len(sessions) > 40:
         print(f"\n  ... {len(sessions) - 40} more")
@@ -300,6 +321,8 @@ def cmd_list():
     print("  ★ = registered via SessionStart hook (interactive Wave session)")
     if n_archived:
         print("  A = archived in Claude Desktop (excluded from `hey continue` matching)")
+    if n_stale:
+        print("  S = recorded cwd no longer exists (excluded from `hey continue` matching)")
 
 
 def cmd_resolve(query, latest_only=False):

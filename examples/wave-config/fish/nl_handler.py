@@ -82,7 +82,7 @@ def is_nav_query(q):
     return False
 
 
-def ollama(messages, timeout=15):
+def ollama(messages, timeout=30):
     # keep_alive=30m pins the model in RAM after each call, so the second
     # invocation skips Ollama's ~25s cold-load. Pairs with the warmup snippet
     # at conf.d/llm-warmup.fish that primes the model on shell startup.
@@ -147,9 +147,11 @@ classify_msg = [{"role": "user", "content": (
 )}]
 
 try:
-    # 8s is enough on a warm model (typical 0.3-1s) and gives the
-    # background warmup a small grace window if the user types fast.
-    intent = ollama(classify_msg, timeout=8).upper()
+    # 30s absorbs Ollama's ~25s cold-load. The keep_alive=30m on every
+    # call keeps the model resident, so subsequent calls return in <1s.
+    # If the user has been idle >30 minutes (Ollama unloaded the model),
+    # this first call after the unload will be slow but won't time out.
+    intent = ollama(classify_msg, timeout=30).upper()
     intent = "QUESTION" if "QUESTION" in intent else "SHELL"
 except Exception:
     intent = "SHELL"
@@ -161,7 +163,7 @@ if intent == "QUESTION":
         {"role": "user",   "content": query}
     ]
     try:
-        print(f"QUESTION:{ollama(answer_msg, timeout=15)}")
+        print(f"QUESTION:{ollama(answer_msg, timeout=30)}")
     except Exception:
         print("FAIL")
     sys.exit(0)
@@ -182,6 +184,6 @@ cmd_msg = [
     {"role": "user", "content": query}
 ]
 try:
-    print(f"COMMAND:{strip_fences(ollama(cmd_msg, timeout=15))}")
+    print(f"COMMAND:{strip_fences(ollama(cmd_msg, timeout=30))}")
 except Exception:
     print("FAIL")
