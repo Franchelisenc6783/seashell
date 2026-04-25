@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# seashell-mirror-mcp — sync MCP servers from Claude Desktop into Claude Code CLI
+#
+# Why: Claude Desktop and Claude Code CLI use SEPARATE config files for MCP
+# server registration. Even when both clients share the same session .jsonl
+# storage (so `hey continue with X` resumes faithfully), the CLI side may be
+# missing tools the Desktop side has — leading to "I don't have a Trello
+# integration in this session" surprises mid-conversation.
+#
+# This script:
+#   1. Reads ~/Library/Application Support/Claude/claude_desktop_config.json
+#   2. Reads what's already registered with the CLI via `claude mcp list`
+#   3. For each Desktop server NOT in the CLI, runs `claude mcp add --scope user`
+#      with the same command/args/env so the resumed session has full parity.
+#
+# Idempotent: re-running only adds what's missing. Never removes anything.
+# Run it once after install, and again any time you add a new MCP server in
+# Claude Desktop that you also want available on the CLI.
+#
+# Usage:
+#   seashell-mirror-mcp              Mirror Desktop → CLI (additive)
+#   seashell-mirror-mcp --dry-run    Show what would be added, do nothing
+#   seashell-mirror-mcp --list       Just print the diff (Desktop minus CLI)
+#   seashell-mirror-mcp -h | --help
+
+set -euo pipefail
+
+DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+
+usage() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
+
+DRY_RUN=0
+LIST_ONLY=0
+case "${1:-}" in
+    --dry-run) DRY_RUN=1 ;;
+    --list)    LIST_ONLY=1 ;;
+esac
+
+# ── Pre-flight ─────────────────────────────────────────────────────────────────
+if [ ! -f "$DESKTOP_CONFIG" ]; then
+    printf '\033[31m✗\033[0m Claude Desktop config not found at:\n  %s\n' "$DESKTOP_CONFIG" >&2
+    printf '\nNothing to mirror — install Claude Desktop first, or skip this step.\n' >&2
+    exit 1
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+    printf '\033[31m✗\033[0m The `claude` CLI is not on PATH. Install Claude Code first.\n' >&2
+    exit 1
+fi
+
+# ── Compute the diff ────────────────────────────────────────────────────────────
+# Servers already registered with the CLI (output: one name per line).
+# The `claude mcp list` output looks like:
+#   server-name: command arg arg - ✓ Connected
+# We strip everything after the first colon. Errors and progress lines
+# (no colon followed by a leading slash or "http") are ignored.
+cli_existing=$(claude mcp list 2>/dev/null \
+    | awk -F: '/^[a-zA-Z0-9_-]+:[[:space:]]/ {print $1}' \
+    | sort -u)
+
+# Compute what's in Desktop, what's missing from CLI
+to_add_json=$(python3 - "$DESKTOP_CONFIG" <<'PYEOF' "$cli_existing"
+import json, sys
+desktop_path = sys.argv[1]
+cli_existing = set(filter(None, sys.argv[2].splitlines()))
+with open(desktop_path) as f:
+    cfg = json.load(f)
+servers = cfg.get("mcpServers", {})
+missing = {name: srv for name, srv in servers.items() if name not in cli_existing}
+print(json.dumps(missing, sort_keys=True))
+PYEOF
+)
+
+# Pull the names back out for display
+missing_names=$(printf '%s' "$to_add_json" | python3 -c '
+import json, sys
+print("\n".join(sorted(json.load(sys.stdin).keys())))
+')
+
+if [ -z "$missing_names" ]; then
+    printf '\033[32m✓\033[0m Nothing to mirror — Claude Code CLI already has every MCP server registered with Claude Desktop.\n'
+    exit 0
+fi
+
+count=$(printf '%s\n' "$missing_names" | wc -l | tr -d ' ')
+total_desktop=$(python3 -c "
+import json
+with open('$DESKTOP_CONFIG') as f:
+    print(len(json.load(f).get('mcpServers', {})))
+")
+
+printf '\033[36m▶\033[0m %s of %s Desktop MCP servers are missing from the Claude Code CLI:\n\n' "$count" "$total_desktop"
+printf '%s\n' "$missing_names" | sed 's/^/    - /'
+echo ""
+
+if [ "$LIST_ONLY" -eq 1 ]; then
+    exit 0
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    printf '\033[33mDry run:\033[0m the following commands would be executed:\n'
+    printf '         (env values redacted — secrets are never displayed)\n\n'
+    SEASHELL_TO_ADD="$to_add_json" python3 - <<'PYEOF'
+import json, os, shlex
+servers = json.loads(os.environ["SEASHELL_TO_ADD"])
+
+# Pattern-match env keys that almost-certainly hold secrets and redact their
+# values. We keep keys that are clearly not secrets (e.g. SENTRY_DISABLED=true,
+# DEBUG=1, PORT=8080) visible so the user can verify the config.
+#
+# Word-component matching (not naive substring) avoids false positives like
+# `PATH` matching `PAT`. We split on underscores and camelCase boundaries,
+# then check whole-word equality against the hint set.
+import re
+SECRET_HINTS = {"KEY", "TOKEN", "SECRET", "PASSWORD", "PASS", "API", "AUTH", "CREDENTIAL", "PAT"}
+NONSECRET_VALUES = {"true", "false", "0", "1", "yes", "no", "on", "off", ""}
+_WORD_SPLIT = re.compile(r'_|(?<=[a-z])(?=[A-Z])')
+
+def is_secret(k, v):
+    components = {c.upper() for c in _WORD_SPLIT.split(k) if c}
+    if components & SECRET_HINTS:
+        # Even if the key looks secret-y, plain bools/numbers aren't secrets
+        return v.lower() not in NONSECRET_VALUES
+    return False
+
+for name, srv in sorted(servers.items()):
+    cmd = ["claude", "mcp", "add", "--scope", "user"]
+    for k, v in (srv.get("env") or {}).items():
+        display_v = "<redacted>" if is_secret(k, v) else v
+        cmd += ["-e", f"{k}={display_v}"]
+    cmd.append(name)
+    cmd.append("--")
+    cmd.append(srv.get("command", ""))
+    cmd.extend(srv.get("args") or [])
+    print("    " + " ".join(shlex.quote(p) for p in cmd))
+PYEOF
+    echo ""
+    printf 'Re-run without --dry-run to apply (real values from your Desktop config will be used).\n'
+    exit 0
+fi
+
+# ── Apply ───────────────────────────────────────────────────────────────────────
+printf 'Applying mirror (this calls `claude mcp add` once per missing server)...\n\n'
+
+# Drive the apply loop from Python — building the claude argv from JSON and
+# subprocess-running it is far cleaner than passing multi-arg records through
+# a shell `read` loop (newlines in values would break the record boundaries).
+SEASHELL_TO_ADD="$to_add_json" python3 - <<'PYEOF'
+import json, os, subprocess, sys
+
+GREEN = "\033[32m"; RED = "\033[31m"; YELLOW = "\033[33m"; RESET = "\033[0m"
+servers = json.loads(os.environ["SEASHELL_TO_ADD"])
+added, failed_names = 0, []
+
+for name, srv in sorted(servers.items()):
+    argv = ["claude", "mcp", "add", "--scope", "user"]
+    for k, v in (srv.get("env") or {}).items():
+        argv += ["-e", f"{k}={v}"]
+    argv += [name, "--", srv.get("command", "")]
+    argv += list(srv.get("args") or [])
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    if proc.returncode == 0:
+        print(f"  {GREEN}✓{RESET} added {name}")
+        added += 1
+    else:
+        # Surface the first line of the error so failures aren't silent
+        err = (proc.stderr or proc.stdout or "").strip().splitlines()
+        snippet = err[0] if err else "(no error output)"
+        print(f"  {RED}✗{RESET} failed: {name} — {snippet}")
+        failed_names.append(name)
+
+print()
+if not failed_names:
+    print(f"{GREEN}✓{RESET} Done — {added} server(s) mirrored from Desktop to CLI.")
+    print()
+    print("Next time you resume a session via `hey continue with <project>` or")
+    print("`claude --resume <id>`, the CLI will have the same MCP tool surface as")
+    print("Claude Desktop. Restart any running `claude` processes for changes to take effect.")
+else:
+    print(f"{YELLOW}⚠{RESET} {added} added, {len(failed_names)} failed.")
+    print(f"Failed servers: {', '.join(failed_names)}")
+    print()
+    print("Retry with `claude mcp add` manually for any failures, or re-run with")
+    print("--dry-run to inspect the exact commands that would be executed.")
+    sys.exit(1)
+PYEOF

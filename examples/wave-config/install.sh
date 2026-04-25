@@ -108,7 +108,7 @@ ok "fastfetch config installed"
 # ── 4. Install Seashell shell commands ─────────────────────────────────────
 say "Installing Seashell commands to ~/.local/bin/"
 mkdir -p "$HOME/.local/bin"
-for cmd in seashell-msg seashell-ask seashell-init seashell-sessions seashell-setup-hooks hey; do
+for cmd in seashell-msg seashell-ask seashell-init seashell-sessions seashell-setup-hooks seashell-mirror-mcp hey; do
     if [ -f "$SCRIPT_DIR/bin/$cmd" ]; then
         cp "$SCRIPT_DIR/bin/$cmd" "$HOME/.local/bin/$cmd"
         chmod +x "$HOME/.local/bin/$cmd"
@@ -116,7 +116,7 @@ for cmd in seashell-msg seashell-ask seashell-init seashell-sessions seashell-se
 done
 # Remove the obsolete fish function from a previous install if present
 rm -f "$HOME/.config/fish/functions/seashell-msg.fish"
-ok "Shell commands installed: seashell-msg, seashell-ask, seashell-init, seashell-sessions, seashell-setup-hooks, hey"
+ok "Shell commands installed: seashell-msg, seashell-ask, seashell-init, seashell-sessions, seashell-setup-hooks, seashell-mirror-mcp, hey"
 
 # ── 4b. Install Claude Code hook scripts ───────────────────────────────────
 if [ -d "$SCRIPT_DIR/hooks" ]; then
@@ -195,7 +195,12 @@ Next steps:
   5. Pull the local LLM (if you haven't):
        ollama pull qwen2.5-coder:1.5b
 
-  6. Try the new commands:
+  6. (Optional, recommended) Mirror your Claude Desktop MCP servers to the
+     Claude Code CLI so resumed sessions have the same tool surface:
+       seashell-mirror-mcp --dry-run   # preview what would be added
+       seashell-mirror-mcp             # apply
+
+  7. Try the new commands:
        seashell-sessions list           # show all your Claude Code sessions
        hey continue with <project>      # resume a project's latest session
        hey what's the latest update?    # send a question to the inbox

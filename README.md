@@ -217,6 +217,18 @@ seashell-ask --no-wait "post and exit"                    # fire-and-forget with
 
 Posts a message with a `reply_token`, polls for a matching reply in `replies.jsonl`, prints when found.
 
+### `seashell-mirror-mcp` — keep CLI and Desktop MCP servers in sync
+
+```bash
+seashell-mirror-mcp --dry-run     # preview what would be added (env values redacted)
+seashell-mirror-mcp --list        # just print the diff
+seashell-mirror-mcp               # apply: clone Desktop MCP entries to the CLI
+```
+
+Claude Desktop and Claude Code CLI use **separate config files** for MCP server registration (`claude_desktop_config.json` vs `~/.claude.json`), even though they share the same session `.jsonl` storage. So a session resumed via `hey continue with <project>` may be missing tools that Desktop has — e.g. you can ask Claude about Trello in Desktop but the resumed CLI session has no Trello MCP. This script mirrors Desktop → CLI (additive only, never removes), making the tool surface match. Idempotent and safe to re-run whenever you add a new server in Desktop.
+
+Dry-run output redacts env values for keys that look like secrets (anything matching the components `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `API`, `AUTH`, `CREDENTIAL`, `PAT`). The actual `claude mcp add` calls use the real values from your Desktop config.
+
 ### `seashell-init` — register a project
 
 ```bash
