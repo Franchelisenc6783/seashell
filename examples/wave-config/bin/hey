@@ -66,7 +66,17 @@ do_resume() {
         exit 1
     fi
 
+    # Claude Code looks up `--resume <id>` under ~/.claude/projects/<encoded-cwd>/
+    # where <encoded-cwd> matches the CURRENT directory. So we must cd to the
+    # session's original cwd before exec — otherwise Claude Code prints
+    # "No conversation found with session ID" and exits 1.
+    local target_cwd
+    target_cwd=$(seashell-sessions cwd "$sid" 2>/dev/null) || target_cwd=""
+
     printf '\033[36m🔄 Resuming session %s (project: %s)...\033[0m\n' "${sid:0:8}" "$project"
+    if [ -n "$target_cwd" ] && [ -d "$target_cwd" ]; then
+        cd "$target_cwd"
+    fi
     exec claude --resume "$sid"
 }
 

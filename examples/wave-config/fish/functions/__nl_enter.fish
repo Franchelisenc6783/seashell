@@ -64,12 +64,21 @@ function __nl_enter --description 'Enter key handler: NL routing with spinner + 
             # for that project (or falls back to most-recent if unpinned).
             set -l sid (seashell-sessions primary "$resume_target" 2>/dev/null)
             if test -n "$sid"
+                # Claude Code looks up `--resume <id>` under
+                # `~/.claude/projects/<encoded-cwd>/` where <encoded-cwd>
+                # is the CURRENT directory. So we must cd to the session's
+                # original cwd before exec'ing, otherwise Claude Code
+                # bails with "No conversation found with session ID".
+                set -l target_cwd (seashell-sessions cwd "$sid" 2>/dev/null)
                 commandline ''
                 commandline -f repaint
                 set_color cyan
                 printf '🔄 Resuming session %s (project: %s)...' (string sub -l 8 -- $sid) "$resume_target"
                 set_color normal
                 echo ""
+                if test -n "$target_cwd"; and test -d "$target_cwd"
+                    builtin cd "$target_cwd"
+                end
                 exec claude --resume "$sid"
             end
             # No matching session → fall through to normal NL processing so

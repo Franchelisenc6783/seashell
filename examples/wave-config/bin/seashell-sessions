@@ -34,6 +34,10 @@ Usage:
                                      session for that project. With <id>: pin
                                      that specific session id.
   seashell-sessions show <id>        Full metadata for one session
+  seashell-sessions cwd <id>         Print the cwd a session was started in
+                                     (used by `hey` to cd before resume —
+                                     Claude Code resolves session ids
+                                     relative to the current cwd)
   seashell-sessions -h | --help      Show this help
 
 Sources:
@@ -241,6 +245,23 @@ def cmd_show(session_id):
     sys.exit(1)
 
 
+def cmd_cwd(session_id):
+    """Print the original cwd for a given session id.
+    Used by `hey` and the fish resume fast-path to `cd` before `claude --resume`,
+    since Claude Code resolves session ids relative to the current cwd."""
+    sessions = merge_sources()
+    for s in sessions:
+        if s["id"] == session_id or s["id"].startswith(session_id):
+            cwd = s.get("cwd", "")
+            if cwd:
+                print(cwd)
+                return
+            print(f"✗ Session '{session_id}' has no recorded cwd", file=sys.stderr)
+            sys.exit(1)
+    print(f"✗ No session matched id '{session_id}'", file=sys.stderr)
+    sys.exit(1)
+
+
 # ── Primary-session pointer helpers ───────────────────────────────────────────
 # A project's primary session is recorded at:
 #   <project>/.seashell-inbox/primary-session.txt
@@ -378,6 +399,10 @@ elif cmd == "show":
     if not args:
         print("Usage: seashell-sessions show <id>", file=sys.stderr); sys.exit(1)
     cmd_show(args[0])
+elif cmd == "cwd":
+    if not args:
+        print("Usage: seashell-sessions cwd <id>", file=sys.stderr); sys.exit(1)
+    cmd_cwd(args[0])
 else:
     print(f"Unknown command: {cmd}", file=sys.stderr); sys.exit(1)
 PYEOF
