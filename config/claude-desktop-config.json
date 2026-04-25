@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "seashell": {
+      "command": "/Users/username/yourfilepath/seashell/.build/release/seashell",
+      "args": ["--port", "9876", "--verbose"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "app:confirmquit": true,
+  "app:tabbar": "top",
+  "autoupdate:channel": "latest",
+  "telemetry:enabled": false,
+  "term:cursor": "bar",
+  "term:cursorblink": true,
+  "term:fontfamily": "JetBrains Mono",
+  "term:fontsize": 13,
+  "term:localshellpath": "/opt/homebrew/bin/fish",
+  "term:macoptionismeta": true,
+  "term:theme": "dracula",
+  "term:transparency": 0.3
+}

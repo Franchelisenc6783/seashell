@@ -1,0 +1,58 @@
+{
+  "btop-monitor": {
+    "blockdef": {
+      "meta": {
+        "cmd": "btop",
+        "cmd:runonstart": true,
+        "controller": "cmd",
+        "view": "term"
+      }
+    },
+    "color": "#22C55E",
+    "icon": "chart-bar",
+    "label": "System Monitor"
+  },
+  "seashell-helper": {
+    "blockdef": {
+      "meta": {
+        "cmd": "python3 $HOME/.local/bin/seashell-helper",
+        "cmd:runonstart": true,
+        "cmd:persistent": true,
+        "controller": "cmd",
+        "view": "term"
+      }
+    },
+    "color": "#1172BA",
+    "description": "Bridge between Claude MCP server and Wave Terminal RPC",
+    "icon": "robot",
+    "label": "Seashell Helper"
+  },
+  "fish-dev": {
+    "blockdef": {
+      "meta": {
+        "cmd": "fish",
+        "cmd:cwd": "~",
+        "cmd:runonstart": true,
+        "controller": "cmd",
+        "view": "term"
+      }
+    },
+    "description": "Fish interactive shell",
+    "icon": "terminal",
+    "label": "Fish Dev"
+  },
+  "daylight": {
+    "blockdef": {
+      "meta": {
+        "cmd": "python3 $HOME/.local/bin/daylight-widget",
+        "cmd:runonstart": true,
+        "controller": "cmd",
+        "view": "term"
+      }
+    },
+    "color": "#FBBF24",
+    "description": "Sunrise/sunset/daylight indicator (requires the 'daylight' brew formula)",
+    "icon": "sun",
+    "label": "Daylight"
+  }
+}

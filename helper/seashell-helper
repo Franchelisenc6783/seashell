@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+# seashell-helper
+# Seashell — in-Wave helper block
+# Pineapple 🍍
+#
+# Runs INSIDE a Wave Terminal block. Listens on TCP localhost:{PORT} and
+# proxies JSON-RPC requests from the external MCP server to Wave's wsh CLI.
+#
+# Requirements:
+#   - Must run inside Wave (needs WAVETERM_JWT in environment)
+#   - Python 3.7+ (standard macOS/Linux install)
+#   - wsh must be in PATH (it is inside Wave blocks)
+#
+# Usage (as a Wave widget, see widgets.json):
+#   cmd: seashell-helper
+#   cmd:runonstart: true
+#   cmd:persistent: true
+#
+# Environment:
+#   SEASHELL_HELPER_PORT  TCP port to listen on (default: 9877)
+#   SEASHELL_HELPER_LOG   Log level: DEBUG, INFO, WARNING (default: INFO)
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import logging
+from typing import Any, Optional
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+PORT = int(os.environ.get("SEASHELL_HELPER_PORT", "9877"))
+LOG_LEVEL = os.environ.get("SEASHELL_HELPER_LOG", "INFO").upper()
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="[seashell-helper] %(levelname)s %(message)s",
+    stream=sys.stderr,
+)
+log = logging.getLogger("seashell-helper")
+
+# ── Startup guard ─────────────────────────────────────────────────────────────
+
+def check_wave_environment() -> bool:
+    """Return False and print guidance if not running inside Wave."""
+    jwt = os.environ.get("WAVETERM_JWT")
+    if not jwt:
+        log.error("WAVETERM_JWT not found. This script must run inside a Wave Terminal block.")
+        log.error("Open this widget from the Wave widget bar to start the helper.")
+        return False
+    block_id = os.environ.get("WAVETERM_BLOCKID", "unknown")
+    tab_id = os.environ.get("WAVETERM_TABID", "unknown")
+    log.info(f"Wave environment detected. Block: {block_id}, Tab: {tab_id}")
+    return True
+
+# ── wsh runner ────────────────────────────────────────────────────────────────
+
+def run_wsh(*args: str, input_data: Optional[str] = None) -> tuple[int, str, str]:
+    """Run a wsh command and return (exit_code, stdout, stderr)."""
+    cmd = ["wsh"] + list(args)
+    log.debug(f"Running: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            input=input_data,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except FileNotFoundError:
+        return -1, "", "wsh not found in PATH"
+    except subprocess.TimeoutExpired:
+        return -1, "", "wsh command timed out"
+    except Exception as e:
+        return -1, "", str(e)
+
+def wsh_json(*args: str) -> Any:
+    """Run wsh with --json flag and parse the result."""
+    code, stdout, stderr = run_wsh(*args, "--json")
+    if code != 0:
+        # Some commands don't support --json; fall back to plain text
+        if "unknown flag" in stderr or "unknown shorthand" in stderr:
+            code2, stdout2, stderr2 = run_wsh(*args)
+            if code2 != 0:
+                raise RuntimeError(stderr2.strip() or f"wsh exited with code {code2}")
+            # Try to parse as JSON anyway (some commands output JSON without --json)
+            try:
+                return json.loads(stdout2)
+            except json.JSONDecodeError:
+                # Return raw text wrapped in a structure
+                return {"raw_output": stdout2.strip()}
+        raise RuntimeError(stderr.strip() or f"wsh exited with code {code}")
+    if not stdout.strip():
+        return None
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        return {"raw_output": stdout.strip()}
+
+# ── Method dispatch ────────────────────────────────────────────────────────────
+
+def handle_ping(params: dict) -> dict:
+    return {"ok": True, "version": "1.0.0"}
+
+def handle_list_workspaces(params: dict) -> Any:
+    try:
+        result = wsh_json("workspace", "list")
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "raw_output" in result:
+            # Parse text output: each line is a workspace
+            lines = result["raw_output"].splitlines()
+            workspaces = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    workspaces.append({"name": line})
+            return workspaces if workspaces else result
+        return result if result else []
+    except Exception as e:
+        raise RuntimeError(f"wave.listWorkspaces failed: {e}")
+
+def handle_list_blocks(params: dict) -> Any:
+    args = ["blocks", "list"]
+    if params.get("workspace_id"):
+        args += ["--workspace", params["workspace_id"]]
+    if params.get("tab_id"):
+        args += ["--tab", params["tab_id"]]
+    if params.get("view"):
+        args += ["--view", params["view"]]
+    try:
+        result = wsh_json(*args)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "raw_output" in result:
+            lines = result["raw_output"].splitlines()
+            blocks = []
+            for line in lines:
+                line = line.strip()
+                if line:
+                    blocks.append({"id": line})
+            return blocks if blocks else result
+        return result if result else []
+    except Exception as e:
+        raise RuntimeError(f"wave.listBlocks failed: {e}")
+
+def handle_create_block(params: dict) -> dict:
+    tab_id = params.get("tab_id")
+    meta = params.get("meta", {})
+    if not tab_id:
+        raise ValueError("tab_id is required")
+
+    view = meta.get("view", "term")
+
+    # For term blocks with a command, use `wsh run -c "cmd"` (no --tab flag supported)
+    if view == "term" and meta.get("cmd"):
+        args = ["run", "-c", meta["cmd"]]
+        if meta.get("cmd:cwd"):
+            args += ["--cwd", meta["cmd:cwd"]]
+        code, stdout, stderr = run_wsh(*args)
+        if code != 0:
+            raise RuntimeError(stderr.strip() or "wsh run failed")
+        block_id = stdout.strip() if stdout.strip() else ""
+        return {"block_id": block_id, "oref": ""}
+
+    # For preview blocks, use `wsh view` (no --tab flag)
+    if view == "preview" and meta.get("file"):
+        args = ["view", meta["file"]]
+        code, stdout, stderr = run_wsh(*args)
+        if code != 0:
+            raise RuntimeError(stderr.strip() or "wsh view failed")
+        return {"block_id": stdout.strip(), "oref": ""}
+
+    # For web blocks, use `wsh web` (no --tab flag)
+    if view == "web" and meta.get("url"):
+        args = ["web", "open", meta["url"]]
+        code, stdout, stderr = run_wsh(*args)
+        if code != 0:
+            raise RuntimeError(stderr.strip() or "wsh web failed")
+        return {"block_id": stdout.strip(), "oref": ""}
+
+    # Fallback: build key=value pairs for createblock
+    args = ["createblock", view]
+    for k, v in meta.items():
+        if k != "view":
+            args.append(f"{k}={json.dumps(v) if not isinstance(v, str) else v}")
+    code, stdout, stderr = run_wsh(*args)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "createblock failed")
+    return {"block_id": stdout.strip(), "oref": ""}
+
+def handle_delete_block(params: dict) -> dict:
+    block_id = params.get("block_id")
+    if not block_id:
+        raise ValueError("block_id is required")
+    # wsh deleteblock expects an ORef like "block:uuid" or just the block ID
+    oref = block_id if block_id.startswith("block:") else f"block:{block_id}"
+    code, _, stderr = run_wsh("deleteblock", oref)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "deleteblock failed")
+    return {"ok": True}
+
+def handle_get_scrollback(params: dict) -> dict:
+    block_id = params.get("block_id")
+    if not block_id:
+        raise ValueError("block_id is required")
+    last_only = params.get("last_command_only", False)
+    args = ["termscrollback", block_id]
+    if last_only:
+        args.append("--last-command")
+    code, stdout, stderr = run_wsh(*args)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "termscrollback failed")
+    lines = stdout.splitlines()
+    return {"lines": lines, "line_count": len(lines)}
+
+def handle_get_block_meta(params: dict) -> dict:
+    block_id = params.get("block_id")
+    if not block_id:
+        raise ValueError("block_id is required")
+    try:
+        meta = wsh_json("getmeta", block_id)
+        return {"meta": meta or {}}
+    except Exception as e:
+        raise RuntimeError(f"wave.getBlockMeta failed: {e}")
+
+def handle_set_block_meta(params: dict) -> dict:
+    block_id = params.get("block_id")
+    meta = params.get("meta", {})
+    if not block_id:
+        raise ValueError("block_id is required")
+    if not meta:
+        raise ValueError("meta cannot be empty")
+    meta_json = json.dumps(meta)
+    code, _, stderr = run_wsh("setmeta", block_id, meta_json)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "setmeta failed")
+    return {"ok": True}
+
+def handle_run_command(params: dict) -> dict:
+    tab_id = params.get("tab_id")
+    command = params.get("command")
+    if not tab_id or not command:
+        raise ValueError("tab_id and command are required")
+
+    # Use wsh run directly — it's designed for running commands in new blocks
+    # Syntax: wsh run -c "command" [--cwd dir] [--exit]
+    args = ["run", "-c", command]
+    if params.get("cwd"):
+        args += ["--cwd", params["cwd"]]
+    code, stdout, stderr = run_wsh(*args)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "wsh run failed")
+    return {"block_id": stdout.strip()}
+
+def handle_view_file(params: dict) -> dict:
+    tab_id = params.get("tab_id")
+    file_path = params.get("file")
+    if not tab_id or not file_path:
+        raise ValueError("tab_id and file are required")
+    args = ["view", file_path]
+    code, stdout, stderr = run_wsh(*args)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "wsh view failed")
+    return {"block_id": stdout.strip()}
+
+def handle_secret_list(params: dict) -> Any:
+    try:
+        result = wsh_json("secret", "list")
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict) and "raw_output" in result:
+            lines = result["raw_output"].splitlines()
+            secrets = [line.strip() for line in lines if line.strip()]
+            return secrets
+        return result if result else []
+    except Exception as e:
+        raise RuntimeError(f"wave.secretList failed: {e}")
+
+def handle_secret_set(params: dict) -> dict:
+    key = params.get("key")
+    value = params.get("value")
+    if not key or value is None:
+        raise ValueError("key and value are required")
+    # wsh secret set expects name=value as a single argument
+    code, _, stderr = run_wsh("secret", "set", f"{key}={value}")
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "secret set failed")
+    return {"ok": True}
+
+def handle_secret_get(params: dict) -> dict:
+    key = params.get("key")
+    if not key:
+        raise ValueError("key is required")
+    code, stdout, stderr = run_wsh("secret", "get", key)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or f"secret get failed (key: {key})")
+    return {"value": stdout.strip()}
+
+def handle_secret_delete(params: dict) -> dict:
+    key = params.get("key")
+    if not key:
+        raise ValueError("key is required")
+    code, _, stderr = run_wsh("secret", "delete", key)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or f"secret delete failed (key: {key})")
+    return {"ok": True}
+
+def handle_edit_file(params: dict) -> dict:
+    tab_id = params.get("tab_id")
+    file_path = params.get("file")
+    if not tab_id or not file_path:
+        raise ValueError("tab_id and file are required")
+    args = ["edit", file_path]
+    code, stdout, stderr = run_wsh(*args)
+    if code != 0:
+        raise RuntimeError(stderr.strip() or "wsh edit failed")
+    return {"block_id": stdout.strip()}
+
+# ── Dispatcher ────────────────────────────────────────────────────────────────
+
+METHODS = {
+    "wave.ping":            handle_ping,
+    "wave.listWorkspaces":  handle_list_workspaces,
+    "wave.listBlocks":      handle_list_blocks,
+    "wave.createBlock":     handle_create_block,
+    "wave.deleteBlock":     handle_delete_block,
+    "wave.getScrollback":   handle_get_scrollback,
+    "wave.getBlockMeta":    handle_get_block_meta,
+    "wave.setBlockMeta":    handle_set_block_meta,
+    "wave.runCommand":      handle_run_command,
+    "wave.viewFile":        handle_view_file,
+    "wave.editFile":        handle_edit_file,
+    # Phase 3: secret management
+    "wave.secretList":      handle_secret_list,
+    "wave.secretSet":       handle_secret_set,
+    "wave.secretGet":       handle_secret_get,
+    "wave.secretDelete":    handle_secret_delete,
+}
+
+def dispatch(request: dict) -> dict:
+    req_id = request.get("id", 0)
+    method = request.get("method", "")
+    params = request.get("params", {})
+
+    handler = METHODS.get(method)
+    if handler is None:
+        return {
+            "id": req_id,
+            "error": {"code": -32601, "message": f"Method not found: {method}"},
+        }
+
+    try:
+        result = handler(params)
+        return {"id": req_id, "result": result}
+    except ValueError as e:
+        return {"id": req_id, "error": {"code": -32602, "message": str(e)}}
+    except RuntimeError as e:
+        return {"id": req_id, "error": {"code": -32001, "message": str(e)}}
+    except Exception as e:
+        log.exception(f"Unhandled error in {method}")
+        return {"id": req_id, "error": {"code": -32603, "message": f"Internal error: {e}"}}
+
+# ── Client connection handler ─────────────────────────────────────────────────
+
+def handle_client(conn: socket.socket, addr: tuple) -> None:
+    log.info(f"Client connected: {addr}")
+    buf = b""
+    try:
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    request = json.loads(line)
+                    log.debug(f"Request: {request.get('method')} id={request.get('id')}")
+                    response = dispatch(request)
+                    response_bytes = json.dumps(response).encode() + b"\n"
+                    conn.sendall(response_bytes)
+                except json.JSONDecodeError as e:
+                    error_resp = {"id": 0, "error": {"code": -32700, "message": f"Parse error: {e}"}}
+                    conn.sendall((json.dumps(error_resp) + "\n").encode())
+    except ConnectionResetError:
+        pass
+    except Exception as e:
+        log.error(f"Client error: {e}")
+    finally:
+        conn.close()
+        log.info(f"Client disconnected: {addr}")
+
+# ── Server ────────────────────────────────────────────────────────────────────
+
+def run_server() -> None:
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", PORT))
+    server.listen(5)
+    log.info(f"Seashell Helper listening on 127.0.0.1:{PORT}")
+    log.info("Ready to proxy Wave RPC requests from Claude MCP server.")
+    try:
+        while True:
+            conn, addr = server.accept()
+            t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+            t.start()
+    except KeyboardInterrupt:
+        log.info("Shutting down.")
+    finally:
+        server.close()
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if not check_wave_environment():
+        sys.exit(1)
+    run_server()

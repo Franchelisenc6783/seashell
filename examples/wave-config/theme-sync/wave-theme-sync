@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""
+wave-theme-sync — auto-switch Wave Terminal theme based on macOS appearance.
+
+Light mode → github-light   (clean, matches Claude Code / VS Code light)
+Dark mode  → dracula        (gaming dark)
+
+Reads ~/.config/waveterm/settings.json, updates term:theme, writes back atomically.
+Safe to run frequently — no-ops if the theme is already correct.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+SETTINGS = os.path.expanduser("~/.config/waveterm/settings.json")
+LIGHT_THEME = "github-light"
+DARK_THEME = "dracula"
+
+
+def is_dark_mode() -> bool:
+    result = subprocess.run(
+        ["defaults", "read", "-g", "AppleInterfaceStyle"],
+        capture_output=True, text=True
+    )
+    return result.stdout.strip() == "Dark"
+
+
+def main():
+    desired = DARK_THEME if is_dark_mode() else LIGHT_THEME
+
+    try:
+        with open(SETTINGS) as f:
+            settings = json.load(f)
+    except FileNotFoundError:
+        settings = {}
+    except json.JSONDecodeError as e:
+        print(f"wave-theme-sync: could not parse settings.json: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    current = settings.get("term:theme", "")
+    if current == desired:
+        return  # already correct, nothing to do
+
+    settings["term:theme"] = desired
+
+    # Atomic write — write to temp file in same dir, then rename
+    settings_dir = os.path.dirname(SETTINGS)
+    try:
+        fd, tmp = tempfile.mkstemp(dir=settings_dir, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, SETTINGS)
+        print(f"wave-theme-sync: {current or 'unset'} → {desired}")
+    except OSError as e:
+        print(f"wave-theme-sync: write failed: {e}", file=sys.stderr)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

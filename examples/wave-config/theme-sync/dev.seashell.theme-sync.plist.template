@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for wave-theme-sync.
+
+  Install with:
+    1. Copy this file to ~/Library/LaunchAgents/dev.seashell.theme-sync.plist
+    2. Replace REPLACE_HOME with your absolute home path (e.g. /Users/yourname)
+       Note: macOS LaunchAgents do NOT expand $HOME or ~ — absolute paths only.
+    3. launchctl load -w ~/Library/LaunchAgents/dev.seashell.theme-sync.plist
+
+  The accompanying install.sh script does this automatically.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.seashell.theme-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>REPLACE_HOME/.local/bin/wave-theme-sync</string>
+    </array>
+
+    <!-- Run every 30 seconds to catch macOS appearance changes quickly -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <!-- Also run immediately on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/wave-theme-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wave-theme-sync.log</string>
+</dict>
+</plist>

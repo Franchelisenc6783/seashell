@@ -1,0 +1,118 @@
+# ── Swift Package Manager ─────────────────────────────────────────
+.build/
+.swiftpm/
+Package.resolved
+
+# ── Xcode ─────────────────────────────────────────────────────────
+*.xcodeproj
+*.xcworkspace
+*.playground
+xcuserdata/
+*.xcuserstate
+
+# ── Build artifacts ───────────────────────────────────────────────
+build/
+DerivedData/
+*.dSYM
+# /seashell — anchor to repo root so it matches only the binary symlink,
+# not the Sources/Seashell/ directory (gitignore is case-insensitive on macOS).
+/seashell
+
+# ── Runtime / config / logs ───────────────────────────────────────
+.seashell/
+*.log
+debug.log
+
+# ── Temporary output ──────────────────────────────────────────────
+/tmp/seashell_*.json
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+
+# ── IDE / editors ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Testing ───────────────────────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ── Documentation build ───────────────────────────────────────────
+docs/_build/
+docs/.sphinx/
+
+# ── Distribution / packaging ──────────────────────────────────────
+dist/
+*.egg-info/
+
+# ── Secrets, env files, credentials ───────────────────────────────
+.env
+.env.*
+.envrc
+.envrc.local
+*.local
+*.local.*
+secrets/
+secrets.enc
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*_credentials.json
+*_credentials.yaml
+gh-token*
+github-token*
+
+# ── Wave Terminal personal artifacts (never commit live config) ───
+wave.lock
+wave.sock
+waveapp.log
+aipresets.json
+settings.json
+widgets.json
+presets/
+
+# ── Backup files ──────────────────────────────────────────────────
+*.backup
+*.backup-*
+*.bak
+*.orig
+*.rej
+
+# ── macOS ─────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# ── Thumbnails ────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+
+# ── Volume / system artifacts ─────────────────────────────────────
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ── AFP share remnants ────────────────────────────────────────────
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
