@@ -194,7 +194,14 @@ seashell-sessions show <id>        # full metadata for one session
 seashell-sessions resolve <name>   # fuzzy-match and print the best id
 ```
 
-Reads from BOTH `~/.seashell/sessions/` (hook-registered) AND `~/.claude/projects/` (filesystem-discovered). The ★ marker in `list` indicates a hook-registered session. The pinned primary session lives at `<project>/.seashell-inbox/primary-session.txt` and is what `hey continue with <project>` resumes.
+Reads from THREE sources:
+- `~/.seashell/sessions/` — hook-registered sessions (★ marker in `list`)
+- `~/.claude/projects/<encoded-cwd>/<id>.jsonl` — filesystem-discovered (every session, every project)
+- `~/Library/Application Support/Claude/claude-code-sessions/<account>/<bridge>/local_*.json` — Claude Desktop's session wrappers, which contribute Desktop's user-friendly **titles** and **archived flag**
+
+This three-source read means fuzzy matching works against Desktop titles too: `hey continue with the current trader pro` will find a session titled `Current Trader Pro Development Session` in Desktop, even if its on-disk cwd basename (e.g. `Github`) wouldn't match. Archived sessions get an `A` marker in `list` and are excluded from fuzzy matching by default — so a long-archived experiment can't be resurrected by accident.
+
+The pinned primary session lives at `<project>/.seashell-inbox/primary-session.txt` and is what `hey continue with <project>` resumes.
 
 ### `seashell-msg` — leave Claude a note
 

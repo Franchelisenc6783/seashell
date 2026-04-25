@@ -123,14 +123,61 @@ def discover_filesystem_sessions():
     return sessions
 
 
+def load_desktop_wrappers():
+    """
+    Read Claude Desktop's session-wrapper files at:
+      ~/Library/Application Support/Claude/claude-code-sessions/<account>/<bridge>/local_*.json
+
+    Each wrapper points to a CLI session id and carries Desktop-only metadata:
+    a user-friendly title, archived flag, model/effort, and last-activity ms.
+
+    Returns: { cli_session_id: {"title": str, "archived": bool, "model": str|None,
+                                "effort": str|None, "last_activity_ms": int|None,
+                                "wrapper_id": str} }
+
+    Returns {} if Claude Desktop isn't installed or the directory is missing.
+    """
+    base = HOME / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+    if not base.is_dir():
+        return {}
+    out = {}
+    # Glob pattern: <account>/<bridge>/local_*.json — two layers deep.
+    for path in base.glob("*/*/local_*.json"):
+        try:
+            with path.open() as f:
+                d = json.load(f)
+        except Exception:
+            continue
+        cli_id = d.get("cliSessionId")
+        if not cli_id:
+            continue
+        out[cli_id] = {
+            "title": d.get("title") or "",
+            "archived": bool(d.get("isArchived", False)),
+            "model": d.get("model"),
+            "effort": d.get("effort"),
+            "last_activity_ms": d.get("lastActivityAt"),
+            "wrapper_id": d.get("sessionId", ""),
+        }
+    return out
+
+
 def merge_sources():
     hooks = load_hook_registry()
     fs = discover_filesystem_sessions()
+    desktop = load_desktop_wrappers()
     fs_by_id = {s["id"]: s for s in fs}
     merged = []
     for fs_rec in fs:
         sid = fs_rec["id"]
         merged_rec = dict(fs_rec)
+        # Desktop wrapper (if any) provides title + archived flag
+        if sid in desktop:
+            dt = desktop[sid]
+            merged_rec["desktop_title"] = dt["title"]
+            merged_rec["archived"] = dt["archived"]
+            if dt.get("model"):
+                merged_rec["desktop_model"] = dt["model"]
         if sid in hooks:
             hook_rec = hooks[sid]
             for key in ("label", "started_at", "wave_block_id", "wave_tab_id"):
@@ -149,7 +196,7 @@ def merge_sources():
     return merged
 
 
-def fuzzy_match(query, sessions):
+def fuzzy_match(query, sessions, include_archived=False):
     q = query.lower().strip()
     # Strip leading articles/possessives — "the weather app" should
     # match the same set as "weather app".
@@ -162,9 +209,22 @@ def fuzzy_match(query, sessions):
     q_norm = "".join(c for c in q if c.isalnum())
     scored = []
     for s in sessions:
+        # Skip archived sessions by default — they're hidden in Desktop's UI
+        # and resurrecting one via `hey continue` is almost certainly not what
+        # the user meant. Pass include_archived=True for `list` so they're
+        # still visible (with a marker), just not picked.
+        if not include_archived and s.get("archived"):
+            continue
+
         label = s.get("label", "").lower()
         label_norm = "".join(c for c in label if c.isalnum())
         cwd = s.get("cwd", "").lower()
+        # Desktop title: "Current Trader Pro Development Session" lives only
+        # in Desktop's wrapper file, never on the .jsonl side. Without
+        # matching against it, a user typing "current trader pro" can't
+        # find a session whose cwd basename is "Github".
+        title = (s.get("desktop_title") or "").lower()
+        title_norm = "".join(c for c in title if c.isalnum())
         score = 0
         if q == label:
             score = 100
@@ -184,6 +244,13 @@ def fuzzy_match(query, sessions):
             # find the project. 4-char minimum prevents tiny labels like "ai"
             # or "cv" from matching half of all queries.
             score = 70
+        # Desktop-title matches (slightly lower scores than label matches so
+        # cwd-basename hits still win when both apply, but high enough that a
+        # title hit is preferred over a fallback cwd-substring hit)
+        elif title and q == title:
+            score = 92
+        elif title_norm and q_norm and q_norm in title_norm and len(q_norm) >= 4:
+            score = 78           # "current trader pro" inside "Current Trader Pro Development Session"
         elif q in cwd:
             score = 50
         if not score:
@@ -203,19 +270,36 @@ def cmd_list():
         print("📭 No Claude Code sessions found.")
         print("   Start one with: claude   (in any directory)")
         return
-    print(f"📋 Active Claude Code sessions ({len(sessions)}):\n")
-    print(f"  {'LABEL':<28} {'LAST ACTIVITY':<22} {'ID (short)':<12} CWD")
-    print(f"  {'-' * 28} {'-' * 22} {'-' * 12} {'-' * 30}")
-    for s in sessions[:30]:
-        label = s.get("label", "?")[:28]
-        last = s.get("last_activity", "")[:22]
+    n_archived = sum(1 for s in sessions if s.get("archived"))
+    n_active = len(sessions) - n_archived
+    if n_archived:
+        print(f"📋 Claude Code sessions: {n_active} active, {n_archived} archived\n")
+    else:
+        print(f"📋 Active Claude Code sessions ({len(sessions)}):\n")
+    print(f"  {'LABEL / DESKTOP TITLE':<40} {'LAST':<11} {'ID':<10} CWD")
+    print(f"  {'-' * 40} {'-' * 11} {'-' * 10} {'-' * 30}")
+    for s in sessions[:40]:
+        label_raw = s.get("label", "?")
+        title = s.get("desktop_title") or ""
+        # Prefer Desktop title (it's user-friendly); fall back to cwd basename.
+        # Truncate to fit the column.
+        display = title if title else label_raw
+        display = display[:39]
+        last = s.get("last_activity", "")[:10]   # YYYY-MM-DD
         sid = s["id"][:8]
         cwd = s.get("cwd", "?")
-        marker = "★" if s.get("hook_registered") else " "
-        print(f"  {label:<28} {last:<22} {sid:<12} {cwd} {marker}")
-    if len(sessions) > 30:
-        print(f"\n  ... {len(sessions) - 30} more")
-    print("\n  ★ = registered via SessionStart hook (interactive Wave session)")
+        # Markers: ★ hook-registered, A archived
+        markers = ""
+        if s.get("hook_registered"): markers += "★"
+        if s.get("archived"):        markers += "A"
+        markers = markers.ljust(2)
+        print(f"  {display:<40} {last:<11} {sid:<10} {cwd}  {markers}")
+    if len(sessions) > 40:
+        print(f"\n  ... {len(sessions) - 40} more")
+    print()
+    print("  ★ = registered via SessionStart hook (interactive Wave session)")
+    if n_archived:
+        print("  A = archived in Claude Desktop (excluded from `hey continue` matching)")
 
 
 def cmd_resolve(query, latest_only=False):
