@@ -27,18 +27,18 @@ All three compose. You can mix-and-match.
 ## ✨ Marquee feature: `hey continue with <project>`
 
 ```
-$ hey continue with CurrentTraderPro
+$ hey continue with myapp
 
-🔄 Resuming session 3b675f63 (project: CurrentTraderPro)...
+🔄 Resuming session a1b2c3d4 (project: myapp)...
 
-> What's the latest update on the regime-detector refactor?
+> What's the latest update on the auth refactor?
 
-We finished extracting the SignalReplay module. Tests pass. Next is
-wiring it into the strategy engine — I have a draft in regime_engine.py
-on line 142. Want me to walk through it?
+We finished extracting the AuthService. Tests pass. Next is wiring it
+into the API layer — I have a draft in routes/auth.py on line 142.
+Want me to walk through it?
 ```
 
-That's a fresh terminal. **Same conversation history** as last night's Claude Desktop Code-mode session. Full project memory. Fuzzy matching — `hey continue with ctp` works too.
+That's a fresh terminal. **Same conversation history** as last night's Claude Desktop Code-mode session. Full project memory. Fuzzy matching — `hey continue with ma` works too.
 
 ## Quick start
 
@@ -170,8 +170,8 @@ See [`examples/seashell-daemon/README.md`](examples/seashell-daemon/README.md) f
 ### `hey` — natural-language entry point
 
 ```bash
-hey continue with CurrentTraderPro            # resume project's latest session
-hey resume ctp                                 # fuzzy match (initials work)
+hey continue with myapp                        # resume project's latest session
+hey resume ma                                  # fuzzy match (initials work)
 hey let's work on the seashell project        # natural language continuation
 hey what's the next thing on the refactor?    # routes to inbox (waits for reply)
 swift build 2>&1 | hey "fix these errors"     # pipe + ask
