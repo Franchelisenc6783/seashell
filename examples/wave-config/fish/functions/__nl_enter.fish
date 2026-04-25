@@ -188,10 +188,10 @@ function __nl_enter --description 'Enter key handler: NL routing with spinner + 
             python3 -c "
 import json, subprocess, sys, re
 q, c = sys.argv[1], sys.argv[2]
-payload = json.dumps({'model':'qwen2.5-coder:1.5b','stream':False,'messages':[
+payload = json.dumps({'model':'qwen2.5-coder:1.5b','stream':False,'keep_alive':'30m','messages':[
     {'role':'system','content':'Explain shell commands in ONE sentence of max 12 words. No bullet points. No newlines. Output only that one sentence.'},
     {'role':'user','content':f'Command: {c}'}]})
-r = subprocess.run(['curl','-s','--max-time','6','http://localhost:11434/api/chat',
+r = subprocess.run(['curl','-s','--max-time','8','http://localhost:11434/api/chat',
     '-H','content-type: application/json','-d',payload],capture_output=True,text=True)
 out = json.loads(r.stdout)['message']['content'].strip()
 first = re.split(r'(?<=[.!?])\s', out)[0]

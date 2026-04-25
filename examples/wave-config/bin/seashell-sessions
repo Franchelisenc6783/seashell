@@ -26,12 +26,20 @@ Usage:
                                      best matches <name> (fuzzy)
   seashell-sessions latest <name>    Print only the most-recent session id
                                      for the matching project
+  seashell-sessions primary <name>   Print the project's pinned primary session
+                                     (falls back to latest if none pinned)
+  seashell-sessions promote [<id>]   Pin a session as the project's primary.
+                                     With no arg: when run inside a project that
+                                     has .seashell-inbox/, pin the most recent
+                                     session for that project. With <id>: pin
+                                     that specific session id.
   seashell-sessions show <id>        Full metadata for one session
   seashell-sessions -h | --help      Show this help
 
 Sources:
   Hook-registered:  ~/.seashell/sessions/<id>.json
   Filesystem-found: ~/.claude/projects/<encoded-cwd>/<id>.jsonl
+  Primary pointer:  <project>/.seashell-inbox/primary-session.txt
 EOF
 }
 
@@ -213,6 +221,120 @@ def cmd_show(session_id):
     sys.exit(1)
 
 
+# ── Primary-session pointer helpers ───────────────────────────────────────────
+# A project's primary session is recorded at:
+#   <project>/.seashell-inbox/primary-session.txt
+# It contains a single line — the session UUID. This is what
+# `hey continue with <project>` resumes by default.
+
+def find_inbox_for_cwd(cwd):
+    """Walk up from cwd looking for a .seashell-inbox/ directory."""
+    p = Path(cwd).resolve()
+    while True:
+        inbox = p / ".seashell-inbox"
+        if inbox.is_dir():
+            return inbox
+        if p.parent == p:
+            return None
+        p = p.parent
+
+
+def find_inbox_for_project(name):
+    """Find the .seashell-inbox/ for a project matched by name."""
+    sessions = merge_sources()
+    matches = fuzzy_match(name, sessions)
+    if not matches:
+        return None, None
+    best = sorted(matches, key=lambda s: s.get("last_activity", ""), reverse=True)[0]
+    cwd = best.get("cwd")
+    if not cwd:
+        return None, best
+    inbox = Path(cwd) / ".seashell-inbox"
+    if not inbox.is_dir():
+        return None, best
+    return inbox, best
+
+
+def read_primary(inbox):
+    pointer = inbox / "primary-session.txt"
+    if not pointer.is_file():
+        return None
+    sid = pointer.read_text().strip()
+    return sid or None
+
+
+def write_primary(inbox, session_id):
+    pointer = inbox / "primary-session.txt"
+    pointer.write_text(session_id + "\n")
+
+
+def cmd_primary(query):
+    """Print the primary session id for the named project.
+    Falls back to the most recent session if no primary pinned."""
+    inbox, best = find_inbox_for_project(query)
+    if inbox:
+        sid = read_primary(inbox)
+        if sid:
+            print(sid)
+            return
+    # Fall back to latest matching session
+    if best:
+        print(best["id"])
+        return
+    print(f"✗ No project matched '{query}'", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_promote(args):
+    """Pin a session as the project's primary.
+    With no args: pin the most-recent session for the project at $PWD.
+    With <id>: pin <id> (inferring the project from its cwd)."""
+    sessions = merge_sources()
+
+    if not args:
+        # No id given — must be inside a project with .seashell-inbox/
+        inbox = find_inbox_for_cwd(os.getcwd())
+        if not inbox:
+            print("✗ No .seashell-inbox/ found at or above " + os.getcwd(), file=sys.stderr)
+            print("  Run `seashell-init` here first, or pass a session id.", file=sys.stderr)
+            sys.exit(1)
+        project_root = str(inbox.parent)
+        # Find the most-recent session whose cwd matches this project
+        candidates = [s for s in sessions if s.get("cwd", "").rstrip("/") == project_root.rstrip("/")]
+        if not candidates:
+            print(f"✗ No sessions found for {project_root}", file=sys.stderr)
+            sys.exit(1)
+        candidates.sort(key=lambda s: s.get("last_activity", ""), reverse=True)
+        chosen = candidates[0]
+        write_primary(inbox, chosen["id"])
+        print(f"✓ Pinned {chosen['id'][:8]} as primary for {Path(project_root).name}")
+        print(f"  ({inbox / 'primary-session.txt'})")
+        return
+
+    # An id (or prefix) was given — find it, then locate its project
+    sid_query = args[0]
+    chosen = None
+    for s in sessions:
+        if s["id"] == sid_query or s["id"].startswith(sid_query):
+            chosen = s
+            break
+    if not chosen:
+        print(f"✗ No session matched id '{sid_query}'", file=sys.stderr)
+        sys.exit(1)
+    cwd = chosen.get("cwd")
+    if not cwd:
+        print(f"✗ Session {chosen['id'][:8]} has no recorded cwd", file=sys.stderr)
+        sys.exit(1)
+    inbox = Path(cwd) / ".seashell-inbox"
+    if not inbox.is_dir():
+        print(f"✗ {cwd} is not Seashell-initialised (no .seashell-inbox/).", file=sys.stderr)
+        print(f"  Run: cd {cwd} && seashell-init", file=sys.stderr)
+        sys.exit(1)
+    write_primary(inbox, chosen["id"])
+    print(f"✓ Pinned {chosen['id'][:8]} as primary for {Path(cwd).name}")
+    print(f"  ({inbox / 'primary-session.txt'})")
+
+
 cmd = sys.argv[1] if len(sys.argv) > 1 else "list"
 args = sys.argv[2:]
 
@@ -226,6 +348,12 @@ elif cmd == "latest":
     if not args:
         print("Usage: seashell-sessions latest <name>", file=sys.stderr); sys.exit(1)
     cmd_resolve(" ".join(args), latest_only=True)
+elif cmd == "primary":
+    if not args:
+        print("Usage: seashell-sessions primary <name>", file=sys.stderr); sys.exit(1)
+    cmd_primary(" ".join(args))
+elif cmd == "promote":
+    cmd_promote(args)
 elif cmd == "show":
     if not args:
         print("Usage: seashell-sessions show <id>", file=sys.stderr); sys.exit(1)

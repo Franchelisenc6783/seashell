@@ -56,8 +56,10 @@ do_resume() {
         exit 1
     fi
 
+    # Prefer the project's pinned primary session; fall back to most-recent.
+    # `seashell-sessions primary` already does this fallback internally.
     local sid
-    if ! sid=$(seashell-sessions latest "$project" 2>/dev/null); then
+    if ! sid=$(seashell-sessions primary "$project" 2>/dev/null); then
         printf '\033[31m✗\033[0m No session matched %s\n' "'$project'" >&2
         printf '\nAvailable sessions:\n' >&2
         seashell-sessions list 2>&1 | head -15 >&2

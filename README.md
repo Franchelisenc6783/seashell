@@ -40,6 +40,8 @@ Want me to walk through it?
 
 That's a fresh terminal. **Same conversation history** as last night's Claude Desktop Code-mode session. Full project memory. Fuzzy matching — `hey continue with ma` works too.
 
+Each project has a **pinned primary session** at `<project>/.seashell-inbox/primary-session.txt`, so `hey continue with <project>` always lands you in the same conversation — even if you've spawned multiple parallel sessions for the same repo. The pin is set automatically the first time you `seashell-init` (largest existing session wins) or on the first `claude` startup in that directory. Re-pin any session anytime with `seashell-sessions promote <id>`.
+
 ## Quick start
 
 ```bash
@@ -184,11 +186,15 @@ If the first words look like a session-resume intent (`continue`, `resume`, `let
 ```bash
 seashell-sessions                  # list everything
 seashell-sessions latest <name>    # print the most recent session id matching <name>
+seashell-sessions primary <name>   # print the project's pinned primary session id
+                                   #   (falls back to latest if none pinned)
+seashell-sessions promote          # pin most-recent session as primary for $PWD
+seashell-sessions promote <id>     # pin a specific session (project inferred from its cwd)
 seashell-sessions show <id>        # full metadata for one session
 seashell-sessions resolve <name>   # fuzzy-match and print the best id
 ```
 
-Reads from BOTH `~/.seashell/sessions/` (hook-registered) AND `~/.claude/projects/` (filesystem-discovered). The ★ marker in `list` indicates a hook-registered session.
+Reads from BOTH `~/.seashell/sessions/` (hook-registered) AND `~/.claude/projects/` (filesystem-discovered). The ★ marker in `list` indicates a hook-registered session. The pinned primary session lives at `<project>/.seashell-inbox/primary-session.txt` and is what `hey continue with <project>` resumes.
 
 ### `seashell-msg` — leave Claude a note
 
@@ -226,6 +232,9 @@ Grouped by tier. Used by Claude (in Desktop, in `claude` REPLs, in the daemon) �
 
 ### Inbox (Tier A — safe)
 - `read_user_inbox`, `inbox_count`, `inbox_history`, `reply_to_user`, `read_my_replies`
+
+### Cross-session peeking (Tier A — safe)
+- `read_session_transcript` — read the most recent N turns of any project's primary session (or any session by id) without resuming it. Lets Claude Desktop answer "what's the status of project X?" by quoting the actual transcript instead of guessing.
 
 ### Direct Wave config (Tier A read / Tier B write)
 - `wave_get_settings`, `wave_set_setting`, `wave_get_widgets`, `wave_create_widget`, `wave_update_widget`, `wave_delete_widget`, `wave_get_ai_presets`, `wave_set_ai_preset`, `wave_set_theme`, `wave_set_appearance`, `wave_get_backgrounds`

@@ -1449,6 +1449,20 @@ struct Seashell: AsyncParsableCommand {
                         ]),
                         "required": .array([])
                     ])
+                ),
+                Tool(
+                    name: "read_session_transcript",
+                    description: "Read the most recent N turns of a Claude Code session's transcript, without resuming it. Use this when the user asks 'what's the status of project X?' or 'what did we last talk about in <project>?' — you read the actual transcript instead of relying on memory. Resolution: pass `project` (fuzzy name) and Seashell follows the project's `.seashell-inbox/primary-session.txt` pointer (or falls back to the largest .jsonl in that project's Claude Code dir). Or pass `session_id` (full UUID or prefix) for direct lookup. Returns formatted user/assistant turns; tool calls are flagged with `[used: <tool>]` and thinking blocks with `[thought]`. Long messages auto-truncate.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "project":        .object(["type": .string("string"), "description": .string("Project name to look up (fuzzy-matched against the basename of every Claude Code project dir). Resolved to the project's primary session.")]),
+                            "session_id":     .object(["type": .string("string"), "description": .string("Full session UUID or unique prefix. Takes precedence over `project` if both given.")]),
+                            "last_n":         .object(["type": .string("string"), "description": .string("How many recent user/assistant turns to return (1-200, default: 30). Tool-result-only turns and unrelated metadata lines are skipped automatically.")]),
+                            "max_body_chars": .object(["type": .string("string"), "description": .string("Per-message body truncation (80-5000, default: 800). Long messages get a '… (truncated, N more chars)' suffix.")])
+                        ]),
+                        "required": .array([])
+                    ])
                 )
             ])
         }
@@ -1617,6 +1631,8 @@ struct Seashell: AsyncParsableCommand {
                 return await handleReplyToUser(params: params, logger: logger)
             case "read_my_replies":
                 return await handleReadMyReplies(params: params, logger: logger)
+            case "read_session_transcript":
+                return await handleReadSessionTranscript(params: params, logger: logger)
 
             default:
                 return CallTool.Result(

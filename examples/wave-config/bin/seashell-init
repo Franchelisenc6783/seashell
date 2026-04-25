@@ -120,6 +120,39 @@ print(json.dumps({
     echo "✓ Registered $project_name in $registry"
 fi
 
+# 4b. Auto-pin a primary session if Claude Code already has history for this project.
+#     The "primary" session is the one `hey continue with <project>` resumes by
+#     default. We pick the largest .jsonl (most messages = most active history)
+#     so the user lands in the session that already has the most context.
+#     Existing primary pins are NEVER overwritten — that requires `promote`.
+primary_pointer="$inbox_dir/primary-session.txt"
+if [ ! -s "$primary_pointer" ]; then
+    auto_pinned=$(python3 - "$project_path" <<'PYEOF'
+import os, sys
+from pathlib import Path
+project_path = sys.argv[1]
+encoded = project_path.replace("/", "-")  # /Users/x/y -> -Users-x-y
+projects_dir = Path(os.environ["HOME"]) / ".claude" / "projects" / encoded
+if not projects_dir.is_dir():
+    sys.exit(0)
+candidates = []
+for jsonl in projects_dir.glob("*.jsonl"):
+    try:
+        candidates.append((jsonl.stat().st_size, jsonl.stem))
+    except OSError:
+        continue
+if not candidates:
+    sys.exit(0)
+candidates.sort(reverse=True)  # largest first
+print(candidates[0][1])
+PYEOF
+)
+    if [ -n "$auto_pinned" ]; then
+        printf '%s\n' "$auto_pinned" > "$primary_pointer"
+        echo "✓ Pinned primary session: ${auto_pinned:0:8} (largest existing .jsonl)"
+    fi
+fi
+
 # 5. Write CLAUDE.md hint if missing or extend if present
 claude_md="$project_path/CLAUDE.md"
 hint_marker="<!-- seashell:inbox-hint -->"

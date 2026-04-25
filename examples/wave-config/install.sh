@@ -130,6 +130,20 @@ if [ -d "$SCRIPT_DIR/hooks" ]; then
     ok "Hook scripts installed"
 fi
 
+# ── 4c. Install Wave-block helper (auto-launched by fish in Wave) ───────────
+# fish config.fish auto-starts this on every Wave fish session if port 9877
+# isn't already in use. Without it, helper-block tools (wave_run_in_block,
+# wave_get_scrollback, etc.) silently fall back to "no helper available".
+HELPER_SRC="$SCRIPT_DIR/../../helper/seashell-helper"
+if [ -f "$HELPER_SRC" ]; then
+    say "Installing seashell-helper to ~/.local/bin/ (in-Wave RPC bridge)"
+    cp "$HELPER_SRC" "$HOME/.local/bin/seashell-helper"
+    chmod +x "$HOME/.local/bin/seashell-helper"
+    ok "seashell-helper installed (auto-starts in Wave fish sessions on port 9877)"
+else
+    warn "helper/seashell-helper not found at $HELPER_SRC — helper-block tools won't work"
+fi
+
 # ── 5. Install wave-theme-sync ──────────────────────────────────────────────
 say "Installing wave-theme-sync to ~/.local/bin/"
 cp "$SCRIPT_DIR/theme-sync/wave-theme-sync" "$HOME/.local/bin/wave-theme-sync"

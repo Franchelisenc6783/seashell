@@ -27,7 +27,7 @@ import json, sys
 current, cwd, hist = sys.argv[1], sys.argv[2], sys.argv[3]
 msg = f'CWD: {cwd}. Recent: {hist}. The user typed: \"{current}\". Complete or convert to the best shell command. Output ONLY the raw command.'
 print(json.dumps({
-    'model': 'qwen2.5-coder:1.5b', 'stream': False,
+    'model': 'qwen2.5-coder:1.5b', 'stream': False, 'keep_alive': '30m',
     'messages': [
         {'role': 'system', 'content': 'Complete or predict shell commands. Output ONLY the raw command. No backticks, no explanation.'},
         {'role': 'user',   'content': msg}

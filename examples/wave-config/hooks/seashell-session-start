@@ -54,6 +54,24 @@ PYEOF
 ACTIVITY_LOG="$SESSIONS_DIR/$SESSION_ID/activity.log"
 printf '[%s] session started: %s (%s)\n' "$(date -u +%FT%TZ)" "$LABEL" "$SESSION_ID" >> "$ACTIVITY_LOG"
 
+# ── Auto-pin primary session if project is Seashell-initialised but unpinned
+# Walk up from CWD looking for .seashell-inbox/. If found and no
+# primary-session.txt exists yet, pin THIS session as the project's primary so
+# subsequent `hey continue with <project>` resumes here. We never overwrite an
+# existing pin — that requires `seashell-sessions promote`.
+PROBE="$CWD"
+while [ -n "$PROBE" ] && [ "$PROBE" != "/" ]; do
+    if [ -d "$PROBE/.seashell-inbox" ]; then
+        PRIMARY_PTR="$PROBE/.seashell-inbox/primary-session.txt"
+        if [ ! -s "$PRIMARY_PTR" ]; then
+            printf '%s\n' "$SESSION_ID" > "$PRIMARY_PTR"
+            printf '[%s] auto-pinned as primary for %s\n' "$(date -u +%FT%TZ)" "$(basename "$PROBE")" >> "$ACTIVITY_LOG"
+        fi
+        break
+    fi
+    PROBE=$(dirname "$PROBE")
+done
+
 # ── (Optional) Auto-spawn side blocks if running inside Wave ─────────────────
 # Requires WAVETERM_JWT to use wsh. Disabled with SEASHELL_NO_SIDE_BLOCKS=1.
 if [ "${SEASHELL_NO_SIDE_BLOCKS:-0}" != "1" ] \
